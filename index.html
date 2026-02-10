@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+	<meta charset="UTF-8">
+	<title>運用資料</title>
+	<style>
+		body { font-family: Consolas, monospace; background:#f7f7f7; }
+		pre  { background:#fff; padding:12px; border:1px solid #ccc; }
+		h2   { border-bottom:2px solid #666; }
+	</style>
+</head>
+<body>
+
+<h1>運用資料</h1>
+
+<h2>概要</h2>
+<p>
+
+</p>
+
+<h2>bat（参考実装）</h2>
+<pre>
+======================================
+config.ini
+# SERVER_FILE 例:
+# E$\deploy\app.bin
+# deploy$\app.bin
+
+# オリジナルファイル（比較元）
+ORIGINAL_FILE=F:\Download\tmp\2d\3d\2026_02_3A_only.csv
+
+# サーバ側のファイルパス（サーバ名以外）
+SERVER_FILE=F:\Download\tmp\2d\3d\2026_02_3A_only.csv
+
+# ハッシュアルゴリズム（SHA256 / SHA1 / MD5）
+HASH_ALGO=SHA256
+======================================
+
+
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+cd /d "%~dp0"
+
+rem ============================================================
+rem ファイル整合性チェックバッチ
+rem
+rem 概要：
+rem  	オリジナル（基準）ファイルと、複数サーバ上の
+rem 	同一ファイルを比較し、整合性を確認する。
+rem
+rem 比較項目：
+rem 	・ハッシュ値
+rem 	・更新日時
+rem 	・ファイルサイズ
+rem
+rem  設定ファイル：
+rem 	・config.ini  … 比較対象ファイル設定
+rem 	・server.ini  … サーバ一覧（1行1台）
+rem
+rem 備考：
+rem 	・bat / ini は Shift-JIS（ANSI）で保存すること
+rem 	・設定ファイル内の# / ; はコメント行として無視される
+rem 	・管理共有（例：D$）を使用
+rem ============================================================
+
+
+rem ============================================================
+rem  設定ファイル存在チェック
+rem ============================================================
+if not exist "config.ini" (
+	echo [ERROR] config.ini が見つかりません
+	pause
+	exit /b 1
+)
+
+if not exist "server.ini" (
+	echo [ERROR] server.ini が見つかりません
+	pause
+	exit /b 1
+)
+
+
+rem ============================================================
+rem config.ini 読み込み
+rem ・KEY=VALUE 形式の設定を変数として展開
+rem ・# / ; コメント行は無視
+rem ============================================================
+for /f "usebackq delims=" %%L in ("config.ini") do (
+	if not "%%L"=="" (
+		if not "%%L:~0,1%"=="#" if not "%%L:~0,1%"==";" (
+			for /f "tokens=1,* delims==" %%A in ("%%L") do (
+				set "%%A=%%B"
+			)
+		)
+	)
+)
+
+
+rem ============================================================
+rem  必須設定チェック
+rem ============================================================
+if not defined ORIGINAL_FILE (
+	echo [ERROR] ORIGINAL_FILE が未定義です
+	pause
+	exit /b 1
+)
+
+if not defined SERVER_FILE (
+	echo [ERROR] SERVER_FILE が未定義です
+	pause
+	exit /b 1
+)
+
+if not exist "%ORIGINAL_FILE%" (
+	echo [ERROR] オリジナルファイルが存在しません
+	echo %ORIGINAL_FILE%
+	pause
+	exit /b 1
+)
+
+if not defined HASH_ALGO set HASH_ALGO=SHA256
+
+
+rem ============================================================
+rem オリジナルファイル情報取得
+rem ・オリジナル（基準）ファイルの情報を取得
+rem ・ここで取得した値が、各サーバとの比較基準
+rem ============================================================
+
+
+echo ===============================
+echo [ORIGINAL FILE]
+echo ===============================
+
+for %%F in ("%ORIGINAL_FILE%") do (
+	set "ORG_SIZE=%%~zF"
+	set "ORG_TIME=%%~tF"
+)
+
+for /f "tokens=1" %%H in ('
+	certutil -hashfile "%ORIGINAL_FILE%" %HASH_ALGO% ^| findstr /r /v "hash CertUtil"
+') do set "ORG_HASH=%%H"
+
+echo Path : %ORIGINAL_FILE%
+echo Hash : %ORG_HASH%
+echo Time : %ORG_TIME%
+echo Size : %ORG_SIZE% bytes
+echo.
+
+
+rem ============================================================
+rem  各サーバ比較処理
+rem ============================================================
+set ALL_OK=1
+
+for /f "usebackq eol=# delims=" %%S in ("server.ini") do (
+	if not "%%S"=="" (
+		if not "%%S:~0,1%"==";" (
+			call :CHECK_SERVER "%%S"
+		)
+	)
+)
+
+
+
+rem ============================================================
+rem  最終結果
+rem ============================================================
+echo ===============================
+if "%ALL_OK%"=="1" (
+	echo [RESULT] 全サーバ一致しています
+) else (
+	echo [RESULT] 不一致のサーバがあります
+)
+echo ===============================
+
+pause
+exit /b
+
+
+rem ============================================================
+rem  サーバ単位チェック
+rem ============================================================
+:CHECK_SERVER
+set "SERVER=%~1"
+
+rem D:\xxx → D$\xxx へ自動変換
+
+rem ====こっからrem消す=======
+rem set "SERVER_PATH=%SERVER_FILE::=$%"
+rem set "TARGET_FILE=\\%SERVER%\%SERVER_PATH%"
+rem ====ここまで=====
+set "TARGET_FILE=%SERVER_FILE%"
+
+echo -------------------------------
+echo [SERVER] %SERVER%
+echo -------------------------------
+echo Path : %TARGET_FILE%
+
+if not exist "%TARGET_FILE%" (
+	echo [NG] ファイルが存在しません
+	set ALL_OK=0
+	echo.
+	exit /b
+)
+
+for %%F in ("%TARGET_FILE%") do (
+	set "SRV_SIZE=%%~zF"
+	set "SRV_TIME=%%~tF"
+)
+
+for /f "tokens=1" %%H in ('
+	certutil -hashfile "%TARGET_FILE%" %HASH_ALGO% ^| findstr /r /v "hash CertUtil"
+') do set "SRV_HASH=%%H"
+
+echo Hash : %SRV_HASH%
+echo Time : %SRV_TIME%
+echo Size : %SRV_SIZE% bytes
+
+
+rem ---- ハッシュ比較 ----
+if "%ORG_HASH%"=="%SRV_HASH%" (
+	echo [OK]   ハッシュ一致
+) else (
+	echo [NG]   ハッシュ不一致
+	set ALL_OK=0
+)
+
+rem ---- 更新日時比較 ----
+if "%ORG_TIME%"=="%SRV_TIME%" (
+	echo [OK]   更新日時一致
+) else (
+	echo [NG] 更新日時不一致
+)
+
+rem ---- サイズ比較 ----
+if "%ORG_SIZE%"=="%SRV_SIZE%" (
+	echo [OK]   サイズ一致
+) else (
+	echo [NG]   サイズ不一致
+	set ALL_OK=0
+)
+
+echo.
+exit /b
+
+</pre>
+
+<h2>運用時の注意</h2>
+<pre>
+・管理者
+</pre>
+
+</body>
+</html>
