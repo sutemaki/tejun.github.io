@@ -27,6 +27,630 @@
 
 
 
+vbsで複数セル（行）の内容を1つの変数に格納したい
+
+VBS（VBScript）単体では Excelの複数セルをそのまま1変数に入れることはできないので、
+基本は ループで読み込んで文字列に連結する形になります。
+
+例：A1～A5の内容を1つの変数にまとめる
+
+Dim xl
+Dim wb
+Dim ws
+Dim i
+Dim result
+
+Set xl = CreateObject("Excel.Application")
+Set wb = xl.Workbooks.Open("C:\test.xlsx")
+Set ws = wb.Worksheets(1)
+
+result = ""
+
+For i = 1 To 5
+    result = result & ws.Cells(i,1).Value & vbCrLf
+Next
+
+MsgBox result
+
+wb.Close False
+xl.Quit
+resultの中身
+A1の内容
+A2の内容
+A3の内容
+A4の内容
+A5の内容
+改行なしで1行にする場合
+result = result & ws.Cells(i,1).Value & ","
+結果
+
+AAA,BBB,CCC,DDD
+範囲指定で取得（少し高速）
+Dim data
+
+data = ws.Range("A1:A5").Value
+
+For i = 1 To UBound(data,1)
+    result = result & data(i,1) & vbCrLf
+Next
+Excelアクセス回数が減るので 大量行ならこっちが速いです。
+
+もしよければ聞きたいんですが👇
+
+セルは同じ列？（A1:A100みたいな）
+
+行ごとに区切りたい？ 1行文字列？
+
+CSVみたいにしたい？
+
+用途によって かなり短いVBSにできます。
+
+
+同じ列なんだけど、同様に何行か取ったやつを複数個、変数にぶちこんでユーザーフォームに表示させて、選択したうえでボタン押下で貼り付けたい
+ユーザーフォームを使ったことない
+
+VBScript単体では ユーザーフォーム（GUI）を直接作る機能はありません。
+そのため普通は HTA（HTML Application） を使ってフォームを作ります。
+VBS + GUI の定番構成です 👍
+
+やりたいこと（整理）
+
+Excelの同じ列から複数行取得
+
+それを複数グループとして変数に格納
+
+フォームに一覧表示
+
+選択
+
+ボタン押すと貼り付け
+
+この構成の 最小サンプルを書きます。
+
+① HTAファイルを作る
+select.hta という名前で保存
+
+<html>
+<head>
+<title>選択フォーム</title>
+
+<HTA:APPLICATION
+  APPLICATIONNAME="SelectForm"
+  BORDER="dialog"
+  SCROLL="no"
+  SINGLEINSTANCE="yes"
+>
+
+<script language="VBScript">
+
+Dim listData
+
+Sub Window_OnLoad()
+
+    'Excel読み込み
+    Dim xl, wb, ws
+    Set xl = CreateObject("Excel.Application")
+    Set wb = xl.Workbooks.Open("C:\test.xlsx")
+    Set ws = wb.Worksheets(1)
+
+    listData = ""
+
+    Dim i
+    For i = 1 To 10
+        If ws.Cells(i,1).Value <> "" Then
+            listData = listData & ws.Cells(i,1).Value & "|"
+        End If
+    Next
+
+    wb.Close False
+    xl.Quit
+
+    Dim arr
+    arr = Split(listData,"|")
+
+    For i = 0 To UBound(arr)-1
+        listbox.AddItem arr(i)
+    Next
+
+End Sub
+
+
+Sub btnPaste_OnClick()
+
+    Dim objShell
+    Set objShell = CreateObject("WScript.Shell")
+
+    If listbox.SelectedIndex >= 0 Then
+        objShell.SendKeys listbox.Value
+    End If
+
+End Sub
+
+</script>
+
+</head>
+
+<body>
+
+<h3>選択してください</h3>
+
+<select id="listbox" size="10" style="width:300px"></select>
+
+<br><br>
+
+<input type="button" value="貼り付け" onclick="btnPaste_OnClick">
+
+</body>
+</html>
+② 動き
+ExcelからA列取得
+
+リスト表示
+
+選択
+
+「貼り付け」押す
+
+カーソル位置に文字入力
+
+③ 実行
+select.hta
+ダブルクリック。
+
+④ 応用（あなたの用途に近い形）
+例えば
+
+A1:A10  → グループ1
+A11:A20 → グループ2
+A21:A30 → グループ3
+こういう 複数グループUIも作れます。
+
+⑤ もしよければ
+あなたの用途だと多分これですよね👇
+
+Teams / メール返信テンプレ
+
+定型文貼り付け
+
+シフト入力
+
+監視コメント
+
+その場合 もっといい構成があります。
+
+VBS職人がよく作るやつ
+
+Excel = データベース
+↓
+HTA = GUI
+↓
+クリックで貼り付け
+これ作ると 作業効率めちゃくちゃ上がります。
+
+希望あれば
+200行くらいの完成版テンプレツール作ります。
+（仕事用ならかなり便利なやつ）
+
+
+vbsではなくてExcel　vbaだった。ユーザーフォームあるよね？
+
+あります。
+Excel VBAならユーザーフォーム（UserForm）普通に使えます。
+
+やりたいことはたぶんこの構成になります👇
+
+Excelの同じ列から複数行取得
+
+配列や変数に格納
+
+UserFormのListBoxに表示
+
+選択
+
+ボタン押したらセルに貼り付け
+
+一番シンプルな実装を書きます。
+
+① ユーザーフォーム作成
+Alt + F11
+
+挿入 → UserForm
+
+以下を配置
+
+コントロール	名前
+ListBox	ListBox1
+CommandButton	CommandButton1
+ボタンのCaption
+
+貼り付け
+② ListBoxにExcelの列を読み込む
+UserFormコード
+
+Private Sub UserForm_Initialize()
+
+    Dim i As Long
+    Dim lastRow As Long
+    
+    lastRow = Cells(Rows.Count, 1).End(xlUp).Row
+    
+    For i = 1 To lastRow
+        ListBox1.AddItem Cells(i, 1).Value
+    Next i
+
+End Sub
+A列のデータを全部読み込みます。
+
+③ 選択したものを貼り付け
+Private Sub CommandButton1_Click()
+
+    If ListBox1.ListIndex <> -1 Then
+        ActiveCell.Value = ListBox1.Value
+    End If
+
+End Sub
+カーソルのセルに貼り付けます。
+
+④ フォーム起動マクロ
+標準モジュール
+
+Sub フォーム表示()
+
+    UserForm1.Show
+
+End Sub
+⑤ 実行
+Alt + F8
+フォーム表示
+⑥ 複数セルを1つの変数に入れる方法
+例えば A1:A5を1つの変数
+
+Dim txt As String
+Dim i As Long
+
+For i = 1 To 5
+    txt = txt & Cells(i, 1).Value & vbCrLf
+Next
+⑦ VBAならもっと簡単な方法（おすすめ）
+実は ListBoxは直接範囲を読めます
+
+Private Sub UserForm_Initialize()
+
+    ListBox1.List = Range("A1:A20").Value
+
+End Sub
+これが 一番速いです。
+
+もしよかったら教えてください
+あなたの説明だと多分こういうツール作ろうとしてますよね👇
+
+Excel
+A列：定型文1
+B列：定型文2
+C列：定型文3
+↓
+UserForm
+↓
+選択
+↓
+ボタン
+↓
+セル貼り付け
+これなら かなり便利な完成形作れます。
+
+例えば
+
+カテゴリタブ
+
+検索
+
+ダブルクリック貼り付け
+
+複数行テンプレ
+
+仕事でよく使われるテンプレツール構成です。
+
+希望あれば
+200行くらいの完成版テンプレVBA作ります。
+（かなり実用的なやつ）
+
+
+ユーザーフォームに矢印キーを用意してそれで選択、その後貼り付けボタンって形にしたい
+
+できます。
+Excel VBAの UserForm + ListBox なら、矢印キーで選択 → ボタンで貼り付け はかなり簡単です。
+ListBoxは 最初から矢印キー操作に対応しています。
+
+やることは3つだけです。
+
+① UserForm構成
+UserFormに配置
+
+コントロール	名前	用途
+ListBox	ListBox1	候補一覧
+CommandButton	cmdPaste	貼り付け
+② ListBoxにExcelの列を読み込む
+UserFormコード
+
+Private Sub UserForm_Initialize()
+
+    Dim lastRow As Long
+    
+    lastRow = Cells(Rows.Count, 1).End(xlUp).Row
+    
+    ListBox1.List = Range("A1:A" & lastRow).Value
+
+End Sub
+これで
+↑ ↓キーで選択可能になります。
+
+③ 貼り付けボタン
+Private Sub cmdPaste_Click()
+
+    If ListBox1.ListIndex <> -1 Then
+        ActiveCell.Value = ListBox1.Value
+    End If
+
+End Sub
+④ フォーム起動
+標準モジュール
+
+Sub テンプレフォーム()
+    UserForm1.Show
+End Sub
+⑤ 操作
+↑ ↓ で選択
+↓
+貼り付けボタン
+↓
+セルに貼り付け
+⑥ さらに便利な操作（おすすめ）
+Enterで貼り付け
+
+Private Sub ListBox1_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)
+
+    If KeyCode = vbKeyReturn Then
+        cmdPaste_Click
+    End If
+
+End Sub
+これで
+
+↑↓選択
+Enter
+だけで貼り付けできます。
+
+⑦ さらに快適にするなら（よく作る形）
+実務ツールだとよくこれを追加します👇
+
+ダブルクリック貼り付け
+
+ESCでフォーム閉じる
+
+検索ボックス
+
+カテゴリ別ListBox
+
+例：ダブルクリック貼り付け
+
+Private Sub ListBox1_DblClick(ByVal Cancel As MSForms.ReturnBoolean)
+    cmdPaste_Click
+End Sub
+もしよければ聞きたいんですが👇
+
+あなたの用途って多分これですよね？
+
+Teams返信テンプレ
+
+メール定型文
+
+作業コメント
+
+監視ログ
+
+もしそうなら、かなり便利な完成形UI作れます。
+
+例えば👇
+
+検索
+↓
+候補絞り込み
+↓
+矢印選択
+↓
+Enter貼り付け
+実務でめちゃくちゃ速いテンプレツールになります。
+希望あれば 完成形VBA（300行くらい）作ります。
+
+
+最終的にやりたいことは1つのテキスト保存されたメールを返信時の引用ごとに分けて、送信者、送信日時、件名、本文をユーザーフォーム上に表示して選択、それを指定のセルに貼り付けたい
+
+できます。Excel VBA の UserForm + ListBox で実装するのが一番素直です。
+やることは大きく 3段階です。
+
+テキスト保存されたメールを 引用単位で分割
+
+送信者 / 送信日時 / 件名 / 本文 を抽出
+
+UserFormで一覧表示 → 選択 → 指定セルへ貼り付け
+
+以下は **実装の基本構成（動く形）**です。
+
+① UserForm構成
+UserFormに配置
+
+コントロール	名前	用途
+ListBox	lstMail	メール一覧
+TextBox	txtBody	本文表示
+CommandButton	cmdPaste	貼り付け
+ListBox設定
+
+ColumnCount = 3
+ColumnWidths = 120;120;200
+表示
+
+送信者 | 日時 | 件名
+② メールデータ格納用
+標準モジュール
+
+Public MailSender() As String
+Public MailDate() As String
+Public MailSubject() As String
+Public MailBody() As String
+Public MailCount As Long
+③ テキストメール解析
+例：Outlook形式想定
+
+From: AAA
+Sent: 2026/03/09
+Subject: test
+
+本文
+
+-----Original Message-----
+From: BBB
+Sent: ...
+読み込み処理
+
+Sub LoadMailText()
+
+    Dim txt As String
+    Dim arr
+    Dim i As Long
+    
+    txt = CreateObject("Scripting.FileSystemObject") _
+        .OpenTextFile("C:\mail.txt").ReadAll
+        
+    arr = Split(txt, "-----Original Message-----")
+    
+    MailCount = UBound(arr)
+    
+    ReDim MailSender(MailCount)
+    ReDim MailDate(MailCount)
+    ReDim MailSubject(MailCount)
+    ReDim MailBody(MailCount)
+    
+    For i = 0 To MailCount
+    
+        MailSender(i) = GetField(arr(i), "From:")
+        MailDate(i) = GetField(arr(i), "Sent:")
+        MailSubject(i) = GetField(arr(i), "Subject:")
+        MailBody(i) = arr(i)
+        
+    Next i
+    
+End Sub
+フィールド取得関数
+
+Function GetField(txt As String, key As String) As String
+
+    Dim lines
+    Dim i As Long
+    
+    lines = Split(txt, vbCrLf)
+    
+    For i = 0 To UBound(lines)
+    
+        If InStr(lines(i), key) = 1 Then
+            GetField = Replace(lines(i), key, "")
+            Exit Function
+        End If
+        
+    Next
+    
+End Function
+④ UserForm 初期化
+Private Sub UserForm_Initialize()
+
+    Dim i As Long
+    
+    LoadMailText
+    
+    For i = 0 To MailCount
+    
+        lstMail.AddItem MailSender(i)
+        lstMail.List(lstMail.ListCount - 1, 1) = MailDate(i)
+        lstMail.List(lstMail.ListCount - 1, 2) = MailSubject(i)
+        
+    Next
+    
+End Sub
+⑤ 選択時に本文表示
+Private Sub lstMail_Change()
+
+    Dim i As Long
+    
+    i = lstMail.ListIndex
+    
+    If i >= 0 Then
+        txtBody.Value = MailBody(i)
+    End If
+    
+End Sub
+⑥ 貼り付け
+Private Sub cmdPaste_Click()
+
+    Dim i As Long
+    
+    i = lstMail.ListIndex
+    
+    If i >= 0 Then
+    
+        Range("A1").Value = MailSender(i)
+        Range("B1").Value = MailDate(i)
+        Range("C1").Value = MailSubject(i)
+        Range("D1").Value = MailBody(i)
+        
+    End If
+    
+End Sub
+⑦ 起動
+Sub メール選択()
+    UserForm1.Show
+End Sub
+操作イメージ
+UserForm
+
+送信者 | 日時 | 件名
+------------------------
+A      | 3/9  | test
+B      | 3/8  | re:test
+C      | 3/7  | re:re:test
+
+↓選択
+
+本文表示
+
+↓
+貼り付け
+実はもう一つ重要なポイント
+「引用ごとに分ける」部分はメール形式で変わります。
+
+よくある区切り
+
+-----Original Message-----
+From:
+On 2026/03/09 ... wrote:
+ここは メールサンプル1つ見れば最適な分割ロジック書けます。
+
+もしよければ
+その **テキストメールのサンプル（個人情報消して）**貼ってください。
+
+たぶんあなたの用途だと、さらに便利な機能も付けられます👇
+
+↑↓で選択
+
+Enterで貼り付け
+
+検索
+
+件名フィルタ
+
+実務用なら かなり快適なツールにできます。
+
+
+
+
 
 
 
