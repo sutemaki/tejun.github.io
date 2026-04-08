@@ -132,20 +132,18 @@ function Show-TemporaryMessage($message, $finalText) {
 # =========================
 # Outlook受信者文字列のメール削除
 # 例:
-# 山田太郎 <a@b.com>; 佐藤花子 <c@d.com>
-# ↓
-# 山田太郎; 佐藤花子
+# 豊田太郎 <toyota@tarou.com> →　豊田太郎
 # =========================
 function Remove-EmailAddressText($text) {
     $work = $text.Trim()
 
-    # 全角山括弧/半角山括弧の中身を削除
-    $work = $work -replace '\s*[<〈][^>〉]+[>〉]\s*', ''
-
-    # Outlookの recipients で余分になりやすい空白を整理
-    $work = $work -replace '\s*;\s*', '; '
-    $work = $work -replace '\s{2,}', ' '
-    $work = $work.Trim(' ', ';', ',')
+    # 例:
+    # 山田太郎 <a@b.com>
+    # 山田太郎〈a@b.com〉
+    # 山田太郎< a@b.com >
+    if ($work -match '^(.*?)\s*[<〈][^>〉]+[>〉]\s*$') {
+        return $matches[1].Trim()
+    }
 
     return $work
 }
@@ -168,6 +166,15 @@ function Format-Text($text) {
             Type   = "weekday_removed"
         }
     }
+
+    # 1) 2026/04/07 (火)  21:37 → 2026/04/07  21:37
+    # 半角スペース2つを維持
+    #if ($text -match '^(\d{4}/\d{2}/\d{2})\s*\(([^)]+)\)\s*(\d{2}:\d{2})$') {
+    #    return @{
+    #        Result = "$($matches[1])  $($matches[3])"
+    #        Type   = "weekday_removed"
+    #    }
+    #}
 
     # 2) 202604071330_001 → 2026/04/07 13:30 /  202604071330_001
     if ($text -match '^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})_(\d+)$') {
