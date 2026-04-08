@@ -5,7 +5,7 @@ Add-Type -AssemblyName System.Drawing
 # フォーム
 # =========================
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "クリップボード整形ツール"
+$form.Text = "gogo Assist"
 $form.Size = New-Object System.Drawing.Size(420,360)
 $form.MinimumSize = New-Object System.Drawing.Size(320,240)
 $form.StartPosition = "CenterScreen"
@@ -13,15 +13,15 @@ $form.BackColor = [System.Drawing.Color]::White
 $form.KeyPreview = $true
 $form.Font = New-Object System.Drawing.Font("Meiryo UI",10)
 
-$defaultTitle      = "クリップボード整形ツール"
-$rainbowShortTitle = "??虹"
-$rainbowLongTitle  = "?? 虹モード発動中（F5でこの時間帯は停止）"
+$defaultTitle      = "gogo Assist"
+$rainbowShortTitle = "S3予約確認"
+$rainbowLongTitle  = "<F5>を押して停止：S3予約確認！！！！"
 
 # =========================
 # ボタン
 # =========================
 $button = New-Object System.Windows.Forms.Button
-$button.Text = "変換する"
+$button.Text = "テキスト変換"
 $button.Font = New-Object System.Drawing.Font("Meiryo UI",18,[System.Drawing.FontStyle]::Bold)
 $button.BackColor = [System.Drawing.Color]::FromArgb(0,120,215)
 $button.ForeColor = [System.Drawing.Color]::White
@@ -38,6 +38,7 @@ $textBox.BackColor = [System.Drawing.Color]::FromArgb(245,245,245)
 $textBox.BorderStyle = "FixedSingle"
 $textBox.TextAlign = "Center"
 $textBox.WordWrap = $true
+$textBox.Text = "コピーしてボタンを押下"
 
 $form.Controls.Add($button)
 $form.Controls.Add($textBox)
@@ -114,34 +115,100 @@ function UpdateLayout {
 }
 
 # =========================
+# 一時メッセージ表示
+# =========================
+function Show-TemporaryMessage($message, $finalText) {
+    $textBox.Text = $message
+    FitTextToBox $textBox.Text
+    $form.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+    Start-Sleep -Milliseconds 500
+
+    $textBox.Text = $finalText
+    FitTextToBox $textBox.Text
+    $form.Refresh()
+}
+
+# =========================
+# Outlook受信者文字列のメール削除
+# 例:
+# 山田太郎 <a@b.com>; 佐藤花子 <c@d.com>
+# ↓
+# 山田太郎; 佐藤花子
+# =========================
+function Remove-EmailAddressText($text) {
+    $work = $text.Trim()
+
+    # 全角山括弧/半角山括弧の中身を削除
+    $work = $work -replace '\s*[<〈][^>〉]+[>〉]\s*', ''
+
+    # Outlookの recipients で余分になりやすい空白を整理
+    $work = $work -replace '\s*;\s*', '; '
+    $work = $work -replace '\s{2,}', ' '
+    $work = $work.Trim(' ', ';', ',')
+
+    return $work
+}
+
+# =========================
 # 整形処理
+# 戻り値:
+#   Result = 変換後文字列
+#   Type   = 種別
 # =========================
 function Format-Text($text) {
     $text = $text.Trim()
+    $currentYear = (Get-Date).Year
 
-    # 2026/04/07（火） 21:37 → 2026/04/07 21:37
-    if ($text -match '^(\d{4}/\d{2}/\d{2})（[^）]+）\s*(\d{2}:\d{2})$') {
-        return "$($matches[1]) $($matches[2])"
+    # 1) 2026/04/07 (火)  21:37 → 2026/04/07 21:37
+    # Excelで日付扱いしやすいように曜日を削除して単一スペースに整形
+    if ($text -match '^(\d{4}/\d{2}/\d{2})\s*\(([^)]+)\)\s*(\d{2}:\d{2})$') {
+        return @{
+            Result = "$($matches[1]) $($matches[3])"
+            Type   = "weekday_removed"
+        }
     }
 
-    # 202604071330_001 → 2026/04/07 13:30 /  202604071330_001
+    # 2) 202604071330_001 → 2026/04/07 13:30 /  202604071330_001
     if ($text -match '^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})_(\d+)$') {
-        return "$($matches[1])/$($matches[2])/$($matches[3]) $($matches[4]):$($matches[5]) /  $text"
+        return @{
+            Result = "$($matches[1])/$($matches[2])/$($matches[3]) $($matches[4]):$($matches[5]) /  $text"
+            Type   = "cronid_converted"
+        }
     }
 
-    # 2026/04/07 13:30 /  202604071330_001 → 2026/04/07 13:30
+    # 3) 2026/04/07 13:30 /  202604071330_001 → 2026/04/07 13:30
     if ($text -match '^(\d{4}/\d{2}/\d{2} \d{2}:\d{2})\s*/\s*\d{12}_\d+$') {
-        return $matches[1]
+        return @{
+            Result = $matches[1]
+            Type   = "cronid_prefix_only"
+        }
     }
 
-    # 2026/04/07 13:30 → 04.07.13.30
+    # 4) 2026/04/07 13:30 → 04.07.13.30
+    # 年が今年と違う場合は 27.04.07.13.30 のように yy.MM.dd.HH.mm
     if ($text -match '^(\d{4})/(\d{2})/(\d{2}) (\d{2}):(\d{2})$') {
-        return "$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
+        $year = [int]$matches[1]
+        if ($year -eq $currentYear) {
+            $formatted = "$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
+        } else {
+            $yy = $matches[1].Substring(2,2)
+            $formatted = "$yy.$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
+        }
+
+        return @{
+            Result = $formatted
+            Type   = "datetime_shortened"
+        }
     }
 
-    # 山田太郎〈yamada@tarou.co.jp〉 → 山田太郎
-    if ($text -match '^(.*)〈.*?〉$') {
-        return $matches[1].Trim()
+    # 5) Outlook受信者欄などからメールアドレス部分を削除
+    $removed = Remove-EmailAddressText $text
+    if ($removed -ne $text -and -not [string]::IsNullOrWhiteSpace($removed)) {
+        return @{
+            Result = $removed
+            Type   = "email_removed"
+        }
     }
 
     return $null
@@ -165,17 +232,36 @@ function Process-Clipboard {
         return
     }
 
-    $result = Format-Text $clip
+    $formatted = Format-Text $clip
 
-    if ($null -eq $result) {
-        $textBox.Text = "? 未対応"
-        FitTextToBox $textBox.Text
+    # 未対応ならそのままクリップボードへ再設定して表示
+    if ($null -eq $formatted) {
+        Set-Clipboard $clip
+        $textBox.Text = $clip
+        FitTextToBox $clip
         return
     }
 
+    $result = [string]$formatted.Result
+    $type   = [string]$formatted.Type
+
     Set-Clipboard $result
-    $textBox.Text = $result
-    FitTextToBox $result
+
+    switch ($type) {
+        "email_removed" {
+            Show-TemporaryMessage "メールアドレスを削除しました" $result
+        }
+        "weekday_removed" {
+            Show-TemporaryMessage "曜日を削除しました" $result
+        }
+        "cronid_converted" {
+            Show-TemporaryMessage "cronIDを変換しました" $result
+        }
+        default {
+            $textBox.Text = $result
+            FitTextToBox $result
+        }
+    }
 }
 
 $button.Add_Click({ Process-Clipboard })
@@ -269,6 +355,8 @@ UpdateLayout
 $form.Add_Resize({
     UpdateLayout
 })
+
+FitTextToBox $textBox.Text
 
 # =========================
 # 起動
