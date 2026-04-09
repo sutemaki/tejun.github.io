@@ -1,4 +1,115 @@
-Add-Type -AssemblyName System.Windows.Forms
+dd
+
+
+function Format-Text($text) {
+    $text = $text.Trim()
+    $currentYear = (Get-Date).Year
+
+    # 1) 2026/4/7 (火)  9:05 → 2026/04/07  09:05
+    #    月/日/時/分を二桁化、曜日削除後は半角スペース2つ
+    #    （）も()も両対応
+    if ($text -match '^(\d{4})/(\d{1,2})/(\d{1,2})\s*[（(][^）)]*[）)]\s*(\d{1,2}):(\d{2})$') {
+        $yyyy = [int]$matches[1]
+        $mm   = [int]$matches[2]
+        $dd   = [int]$matches[3]
+        $hh   = [int]$matches[4]
+        $mi   = [int]$matches[5]
+
+        return @{
+            Result = ('{0:D4}/{1:D2}/{2:D2}  {3:D2}:{4:D2}' -f $yyyy, $mm, $dd, $hh, $mi)
+            Type   = "weekday_removed"
+        }
+    }
+
+    # 2) 202604071330_001 → 2026/04/07 13:30 /  202604071330_001
+    if ($text -match '^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})_(\d+)$') {
+        return @{
+            Result = "$($matches[1])/$($matches[2])/$($matches[3]) $($matches[4]):$($matches[5]) /  $text"
+            Type   = "cronid_converted"
+        }
+    }
+
+    # 3) 2026/04/07 13:30 /  202604071330_001 → 2026/04/07 13:30
+    if ($text -match '^(\d{4}/\d{2}/\d{2} \d{2}:\d{2})\s*/\s*\d{12}_\d+$') {
+        return @{
+            Result = $matches[1]
+            Type   = "cronid_prefix_only"
+        }
+    }
+
+    # 4) 4/7 13:00 → 2026/04/07 13:00
+    if ($text -match '^(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})$') {
+        $mm = [int]$matches[1]
+        $dd = [int]$matches[2]
+        $hh = [int]$matches[3]
+        $mi = [int]$matches[4]
+
+        return @{
+            Result = ('{0:D4}/{1:D2}/{2:D2} {3:D2}:{4:D2}' -f $currentYear, $mm, $dd, $hh, $mi)
+            Type   = "mdhm_to_excel"
+        }
+    }
+
+    # 5) 2026/04/07 13:30 → 04.07.13.30
+    #    年が今年と違う場合は 27.04.07.13.30
+    if ($text -match '^(\d{4})/(\d{2})/(\d{2}) (\d{2}):(\d{2})$') {
+        $year = [int]$matches[1]
+        if ($year -eq $currentYear) {
+            $formatted = "$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
+        } else {
+            $yy = $matches[1].Substring(2,2)
+            $formatted = "$yy.$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
+        }
+
+        return @{
+            Result = $formatted
+            Type   = "datetime_shortened"
+        }
+    }
+
+    # 6) Outlook送信者1人分のメールアドレス削除
+    #    山田太郎 <aaa@bbb.com>
+    #    山田太郎〈aaa@bbb.com〉
+    #    → 山田太郎
+    #
+    #    シンプル版（「<」以降を全部削除）を使いたい場合は
+    #    下のコメントを外して、上の if ブロックの代わりに使ってください
+    #
+    # if ($text -match '[<〈]') {
+    #     return @{
+    #         Result = ($text -split '[<〈]')[0].Trim()
+    #         Type   = "email_removed"
+    #     }
+    # }
+
+    if ($text -match '^(.*?)\s*[<〈][^>〉]+[>〉]\s*$') {
+        return @{
+            Result = $matches[1].Trim()
+            Type   = "email_removed"
+        }
+    }
+
+    # 7) 一般文字列の () / （） を中身ごと削除
+    #    例:
+    #    山田太郎(東京) → 山田太郎
+    #    山田太郎（東京） → 山田太郎
+    if ($text -match '[（(][^）)]*[）)]') {
+        $removed = ($text -replace '\s*[（(][^）)]*[）)]\s*', ' ').Trim()
+        $removed = ($removed -replace '\s{2,}', ' ').Trim()
+
+        if (-not [string]::IsNullOrWhiteSpace($removed)) {
+            return @{
+                Result = $removed
+                Type   = "paren_removed"
+            }
+        }
+    }
+
+    return $null
+}
+
+
+-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 # =========================
