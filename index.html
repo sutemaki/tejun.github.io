@@ -158,23 +158,20 @@ function Format-Text($text) {
     $text = $text.Trim()
     $currentYear = (Get-Date).Year
 
-    # 1) 2026/04/07 (火)  21:37 → 2026/04/07 21:37
-    # Excelで日付扱いしやすいように曜日を削除して単一スペースに整形
-    if ($text -match '^(\d{4}/\d{2}/\d{2})\s*\(([^)]+)\)\s*(\d{2}:\d{2})$') {
+    # 1) 2026/4/7 (火)  9:05 → 2026/04/07  09:05
+    #    月/日/時/分を二桁化、曜日削除後は半角スペース2つ
+    if ($text -match '^(\d{4})/(\d{1,2})/(\d{1,2})\s*\(([^)]+)\)\s*(\d{1,2}):(\d{2})$') {
+        $yyyy = [int]$matches[1]
+        $mm   = [int]$matches[2]
+        $dd   = [int]$matches[3]
+        $hh   = [int]$matches[5]
+        $mi   = [int]$matches[6]
+
         return @{
-            Result = "$($matches[1]) $($matches[3])"
+            Result = ('{0:D4}/{1:D2}/{2:D2}  {3:D2}:{4:D2}' -f $yyyy, $mm, $dd, $hh, $mi)
             Type   = "weekday_removed"
         }
     }
-
-    # 1) 2026/04/07 (火)  21:37 → 2026/04/07  21:37
-    # 半角スペース2つを維持
-    #if ($text -match '^(\d{4}/\d{2}/\d{2})\s*\(([^)]+)\)\s*(\d{2}:\d{2})$') {
-    #    return @{
-    #        Result = "$($matches[1])  $($matches[3])"
-    #        Type   = "weekday_removed"
-    #    }
-    #}
 
     # 2) 202604071330_001 → 2026/04/07 13:30 /  202604071330_001
     if ($text -match '^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})_(\d+)$') {
@@ -192,8 +189,22 @@ function Format-Text($text) {
         }
     }
 
-    # 4) 2026/04/07 13:30 → 04.07.13.30
-    # 年が今年と違う場合は 27.04.07.13.30 のように yy.MM.dd.HH.mm
+    # 4) 4/7 13:00 → 2026/04/07 13:00
+    #    Excelで日付として扱いやすいように現在年を補完
+    if ($text -match '^(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})$') {
+        $mm = [int]$matches[1]
+        $dd = [int]$matches[2]
+        $hh = [int]$matches[3]
+        $mi = [int]$matches[4]
+
+        return @{
+            Result = ('{0:D4}/{1:D2}/{2:D2} {3:D2}:{4:D2}' -f $currentYear, $mm, $dd, $hh, $mi)
+            Type   = "mdhm_to_excel"
+        }
+    }
+
+    # 5) 2026/04/07 13:30 → 04.07.13.30
+    #    年が今年と違う場合は 27.04.07.13.30
     if ($text -match '^(\d{4})/(\d{2})/(\d{2}) (\d{2}):(\d{2})$') {
         $year = [int]$matches[1]
         if ($year -eq $currentYear) {
@@ -209,7 +220,7 @@ function Format-Text($text) {
         }
     }
 
-    # 5) Outlook受信者欄などからメールアドレス部分を削除
+    # 6) Outlook送信者1人分のメールアドレス削除
     $removed = Remove-EmailAddressText $text
     if ($removed -ne $text -and -not [string]::IsNullOrWhiteSpace($removed)) {
         return @{
@@ -220,7 +231,6 @@ function Format-Text($text) {
 
     return $null
 }
-
 # =========================
 # クリップボード処理
 # =========================
@@ -264,6 +274,9 @@ function Process-Clipboard {
         "cronid_converted" {
             Show-TemporaryMessage "cronIDを変換しました" $result
         }
+        "mdhm_to_excel" {
+    Show-TemporaryMessage "日付形式を補完しました" $result
+}
         default {
             $textBox.Text = $result
             FitTextToBox $result
