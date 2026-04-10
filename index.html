@@ -201,7 +201,7 @@ function FmtTxt($txt) {
     }
 
     # 2) メアド削除
-    # 豊田太郎 <toyota.tarou@yyy.co.jp>
+    # 例:豊田太郎 <toyota.tarou@yyy.co.jp>　→　豊田太郎
     #
     # Outlookの送信者欄などを想定し、
     # 表示名だけを残してメールアドレス部分を削除する
@@ -268,19 +268,18 @@ function FmtTxt($txt) {
     }
 
     # 補助変換:
-    # 4/7 13:00 → 2026/04/07 13:00
+    # 例: 4/9(木)　13:00
     #
-    # Excelで日付として読ませやすいように、現在年を補完して
-    # yyyy/MM/dd HH:mm 形式へそろえる
-    if ($txt -match '^(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})$') {
-        $mm = [int]$matches[1]
-        $dd = [int]$matches[2]
-        $hh = [int]$matches[3]
-        $mi = [int]$matches[4]
+    # () / （） を半角扱いで中身ごと削除
+    if ($txt -match '[（(][^）)]*[）)]') {
+        $cut = ($txt -replace '\s*[（(][^）)]*[）)]\s*', ' ').Trim()
+        $cut = ($cut -replace '\s{2,}', ' ').Trim()
 
-        return @{
-            Result = ('{0:D4}/{1:D2}/{2:D2} {3:D2}:{4:D2}' -f $nowYear, $mm, $dd, $hh, $mi)
-            Type   = "date_add"
+        if (-not [string]::IsNullOrWhiteSpace($cut)) {
+            return @{
+                Result = $cut
+                Type   = "paren_del"
+            }
         }
     }
 
@@ -339,6 +338,8 @@ function DoClip {
         "mail_del" { TmpMsg "メールアドレスを削除しました" $res }
         "wd_del"   { TmpMsg "曜日を削除しました" $res }
         "cron_add" { TmpMsg "cronIDを変換しました" $res }
+        "cron_cut" { TmpMsg "cronIDを削除しました" $res }
+        "paren_del" { TmpMsg "日付形式に変換しました" $res }
         default {
             $out.Text = $res
             FitTxt $res
