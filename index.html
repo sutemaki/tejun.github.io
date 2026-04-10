@@ -1,1 +1,464 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
+# =========================
+# フォーム
+# =========================
+# アプリ全体の見た目や基本設定をここでまとめて定義する
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "gogo Assist R ver0.1.2"
+$form.Size = New-Object System.Drawing.Size(420,360)
+$form.MinimumSize = New-Object System.Drawing.Size(320,240)
+$form.StartPosition = "CenterScreen"
+$form.BackColor = [System.Drawing.Color]::White
+$form.KeyPreview = $true
+$form.Font = New-Object System.Drawing.Font("Meiryo UI",10)
+
+# 通常時とS3アラーム時のタイトル文字列
+$ttlDef  = "gogo Assist R ver0.1.2"
+$s3Short = "S3アラーム"
+$s3Long  = "<F5>を押して停止：S3アラーム！！！！"
+
+# 直前にどの整形を通ったかを覚えておく
+# #5 の「スケジュール登録の形に変換」は、前回が #4 のときだけ動かしたいため保持する
+$script:lastFmt = ""
+
+# S3アラーム用の制御変数
+# s3StopHr : F5を押した時間帯はS3演出を止めるために保持
+# s3Hue    : 色相。これを少しずつ進めてフェード虹にする
+# s3LastTgl: タイトルの長短切り替え時刻
+# s3LongOn : 長いタイトルを表示中かどうか
+$script:s3StopHr  = -1
+$script:s3Hue     = 0
+$script:s3LastTgl = Get-Date
+$script:s3LongOn  = $false
+
+# =========================
+# ボタン
+# =========================
+# 変換実行用の大きなボタン
+$btn = New-Object System.Windows.Forms.Button
+$btn.Text = "テキスト変換"
+$btn.Font = New-Object System.Drawing.Font("Meiryo UI",18,[System.Drawing.FontStyle]::Bold)
+$btn.BackColor = [System.Drawing.Color]::FromArgb(0,120,215)
+$btn.ForeColor = [System.Drawing.Color]::White
+$btn.FlatStyle = "Flat"
+$btn.FlatAppearance.BorderSize = 0
+
+# =========================
+# テキストボックス
+# =========================
+# 結果表示用。直接編集はさせず、表示専用にしている
+$out = New-Object System.Windows.Forms.TextBox
+$out.Multiline = $true
+$out.ReadOnly = $true
+$out.BackColor = [System.Drawing.Color]::FromArgb(245,245,245)
+$out.BorderStyle = "FixedSingle"
+$out.TextAlign = "Center"
+$out.WordWrap = $true
+$out.Text = "コピーしてボタンを押下"
+
+$form.Controls.Add($btn)
+$form.Controls.Add($out)
+
+# =========================
+# 内容に応じてフォントサイズ調整
+# =========================
+# テキストボックスの中に文字が必ず収まるように、
+# 表示文字列の長さとテキストボックスの大きさからフォントサイズを自動調整する
+function FitTxt($txt) {
+
+    # 空の場合は標準サイズに戻して終了
+    if ([string]::IsNullOrWhiteSpace($txt)) {
+        $out.Font = New-Object System.Drawing.Font("Meiryo UI",10)
+        return
+    }
+
+    # 文字を描画できる実質的な領域を少し余白を引いて計算
+    $maxW = [Math]::Max(10, $out.ClientSize.Width - 10)
+    $maxH = [Math]::Max(10, $out.ClientSize.Height - 10)
+
+    # 基本は折り返しありで測る
+    $flags = [System.Windows.Forms.TextFormatFlags]::WordBreak
+
+    # 改行が無い場合は1行として測る
+    if ($txt -notmatch "(\r\n|\r|\n)") {
+        $flags = $flags -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
+    }
+
+    # 大きいフォントから順に試して、収まる最大サイズを採用する
+    for ($sz = 40; $sz -ge 6; $sz--) {
+        $f = New-Object System.Drawing.Font("Meiryo UI", $sz)
+
+        $m = [System.Windows.Forms.TextRenderer]::MeasureText(
+            $txt,
+            $f,
+            (New-Object System.Drawing.Size($maxW, 1000)),
+            $flags
+        )
+
+        if ($m.Width -le $maxW -and $m.Height -le $maxH) {
+            $out.Font = $f
+            return
+        }
+    }
+
+    # どれにも収まらない場合の最小フォント
+    $out.Font = New-Object System.Drawing.Font("Meiryo UI",6)
+}
+
+# =========================
+# レイアウト更新
+# =========================
+# ウィンドウサイズ変更時に、現在の比率を保ったまま
+# ボタンと結果欄の位置・サイズを再計算する
+function UpdLay {
+
+    # 外枠余白と、ボタンと結果欄の間隔
+    $mg = 20
+    $sp = 10
+
+    $w = $form.ClientSize.Width
+    $h = $form.ClientSize.Height
+
+    # 左右の余白を引いた、実際に使える横幅
+    $cw = $w - ($mg * 2)
+    if ($cw -lt 50) { $cw = 50 }
+
+    # 結果欄は小さめ固定寄りにし、上のボタンを大きく確保する
+    $outH = [int]($h * 0.14)
+    if ($outH -lt 40) { $outH = 40 }
+    if ($outH -gt 80) { $outH = 80 }
+
+    # 残り領域をボタン高さに使う
+    $btnH = $h - ($mg * 2) - $sp - $outH
+    if ($btnH -lt 60) { $btnH = 60 }
+
+    # ボタンは上側に配置
+    $btn.Location = New-Object System.Drawing.Point($mg, $mg)
+    $btn.Size     = New-Object System.Drawing.Size($cw, $btnH)
+
+    # 結果欄はボタンの下に配置
+    $outY = $mg + $btnH + $sp
+    $out.Location = New-Object System.Drawing.Point($mg, $outY)
+    $out.Size     = New-Object System.Drawing.Size($cw, $outH)
+
+    # サイズが変わったのでフォントも再調整する
+    FitTxt $out.Text
+}
+
+# =========================
+# 一時メッセージ表示
+# =========================
+# 「曜日を削除しました」などの案内を0.5秒だけ表示し、
+# その後に最終結果へ切り替えるための共通処理
+function TmpMsg($msg, $fin) {
+
+    # 先にメッセージ表示
+    $out.Text = $msg
+    FitTxt $out.Text
+    $form.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+    Start-Sleep -Milliseconds 500
+
+    # その後、最終結果へ切り替え
+    $out.Text = $fin
+    FitTxt $out.Text
+    $form.Refresh()
+}
+
+# =========================
+# 整形処理
+# =========================
+# クリップボードから取得した文字列を見て、
+# どのパターンに当てはまるかを判定し、整形後の文字列と種別を返す
+function FmtTxt($txt) {
+
+    # 前後の余分な空白や改行を削る
+    $txt = $txt.Trim()
+
+    # 現在年は「年が今と違う場合だけ先頭にyyを付ける」判定に使う
+    $nowYear = (Get-Date).Year
+
+    # 整形処理
+    # 1) 曜日削除
+    # 例:2026/04/07 (火)  21:37 → 2026/04/07 21:37
+    #
+    # 実際には月日や時間が1桁でも受け付け、
+    # 出力時は 2026/04/07  09:05 のように二桁にそろえる
+    # また、() と （） のどちらも中身ごと削除する
+    if ($txt -match '^(\d{4})/(\d{1,2})/(\d{1,2})\s*[（(][^）)]*[）)]\s*(\d{1,2}):(\d{2})$') {
+        $yy = [int]$matches[1]
+        $mm = [int]$matches[2]
+        $dd = [int]$matches[3]
+        $hh = [int]$matches[4]
+        $mi = [int]$matches[5]
+
+        return @{
+            Result = ('{0:D4}/{1:D2}/{2:D2}  {3:D2}:{4:D2}' -f $yy, $mm, $dd, $hh, $mi)
+            Type   = "wd_del"
+        }
+    }
+
+    # 2) メアド削除
+    # 豊田太郎 <toyota.tarou@yyy.co.jp>
+    #
+    # Outlookの送信者欄などを想定し、
+    # 表示名だけを残してメールアドレス部分を削除する
+    if ($txt -match '^(.*?)\s*[<〈][^>〉]+[>〉]\s*$') {
+        return @{
+            Result = $matches[1].Trim()
+            Type   = "mail_del"
+        }
+    }
+
+    # 2)メアド削除「<」以降全部削除
+    # if ($txt -match '[<〈]') {
+    #     return @{
+    #         Result = ($txt -split '[<〈]')[0].Trim()
+    #         Type   = "mail_del"
+    #     }
+    # }
+
+    # 3) cronID変換
+    # 例:202604071330_001 → 2026/04/07 13:30 /  202604071330_001
+    #
+    # yyyymmddhhmm_xxx の並びを、人が読める日時 + 元のcronID にする
+    if ($txt -match '^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})_(\d+)$') {
+        return @{
+            Result = "$($matches[1])/$($matches[2])/$($matches[3]) $($matches[4]):$($matches[5]) /  $txt"
+            Type   = "cron_add"
+        }
+    }
+
+    # 4) cronID削除
+    # 例:2026/04/07 13:30 /  202604071330_001 → 2026/04/07 13:30
+    #
+    # 「日時 / cronID」の形式から、先頭の日時だけを取り出す
+    if ($txt -match '^(\d{4}/\d{2}/\d{2} \d{2}:\d{2})\s*/\s*\d{12}_\d+$') {
+        return @{
+            Result = $matches[1]
+            Type   = "cron_cut"
+        }
+    }
+
+    # 5) スケジュール登録の形に変換
+    # 例:2026/04/07 13:30 → 04.07.13.30
+    # 年が今年と違う場合は 27.04.07.13.30 のように
+    #
+    # ただし、これは単独の日時に対して常に動かすのではなく、
+    # 前回の処理が #4 の「cronID削除」だった場合のみ動かす
+    if (
+        $script:lastFmt -eq "cron_cut" -and
+        $txt -match '^(\d{4})/(\d{2})/(\d{2}) (\d{2}):(\d{2})$'
+    ) {
+        $yy = [int]$matches[1]
+
+        if ($yy -eq $nowYear) {
+            $res = "$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
+        } else {
+            $y2  = $matches[1].Substring(2,2)
+            $res = "$y2.$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
+        }
+
+        return @{
+            Result = $res
+            Type   = "sch_fmt"
+        }
+    }
+
+    # 補助変換:
+    # 4/7 13:00 → 2026/04/07 13:00
+    #
+    # Excelで日付として読ませやすいように、現在年を補完して
+    # yyyy/MM/dd HH:mm 形式へそろえる
+    if ($txt -match '^(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})$') {
+        $mm = [int]$matches[1]
+        $dd = [int]$matches[2]
+        $hh = [int]$matches[3]
+        $mi = [int]$matches[4]
+
+        return @{
+            Result = ('{0:D4}/{1:D2}/{2:D2} {3:D2}:{4:D2}' -f $nowYear, $mm, $dd, $hh, $mi)
+            Type   = "date_add"
+        }
+    }
+
+    return $null
+}
+
+# =========================
+# クリップボード処理
+# =========================
+# クリップボードから文字列を取得し、
+# 整形対象なら整形・再コピー、未対応ならそのまま表示する
+function DoClip {
+
+    # 画像やファイルなど、テキスト以外は処理しない
+    if (-not [System.Windows.Forms.Clipboard]::ContainsText()) {
+        $out.Text = "クリップボードがテキストじゃありません"
+        FitTxt $out.Text
+        return
+    }
+
+    # テキストをそのまま取得する。-Raw で改行も含めて1つの文字列として扱う
+    $clip = Get-Clipboard -Raw
+
+    # 空文字や空白だけなら終了
+    if ([string]::IsNullOrWhiteSpace($clip)) {
+        $out.Text = "クリップボードが空です。"
+        FitTxt $out.Text
+        return
+    }
+
+    # 整形判定を実施
+    $r = FmtTxt $clip
+
+    # 未対応なら前回整形種別をリセットして、
+    # クリップボードの中身をそのまま表示・再設定する
+    if ($null -eq $r) {
+        $script:lastFmt = ""
+        Set-Clipboard $clip
+        $out.Text = $clip
+        FitTxt $clip
+        return
+    }
+
+    # 整形後の文字列と種別を取り出す
+    $res  = [string]$r.Result
+    $type = [string]$r.Type
+
+    # 次回の判定で使うため、今回の整形種別を保存しておく
+    $script:lastFmt = $type
+
+    # 整形後の結果をクリップボードへ戻す
+    Set-Clipboard $res
+
+    # 種別ごとに一時メッセージを出し分ける
+    switch ($type) {
+        "mail_del" { TmpMsg "メールアドレスを削除しました" $res }
+        "wd_del"   { TmpMsg "曜日を削除しました" $res }
+        "cron_add" { TmpMsg "cronIDを変換しました" $res }
+        default {
+            $out.Text = $res
+            FitTxt $res
+        }
+    }
+}
+
+# =========================
+# HSV→RGB変換
+# =========================
+# S3アラーム時の色変化用。
+# 色相(H)を少しずつ進めて、なめらかに色が変わるようにする
+function Hsv2Rgb($h, $s, $v) {
+    $c = $v * $s
+    $x = $c * (1 - [math]::Abs((($h / 60.0) % 2) - 1))
+    $m = $v - $c
+
+    if ($h -lt 60) {
+        $r = $c; $g = $x; $b = 0
+    }
+    elseif ($h -lt 120) {
+        $r = $x; $g = $c; $b = 0
+    }
+    elseif ($h -lt 180) {
+        $r = 0; $g = $c; $b = $x
+    }
+    elseif ($h -lt 240) {
+        $r = 0; $g = $x; $b = $c
+    }
+    elseif ($h -lt 300) {
+        $r = $x; $g = 0; $b = $c
+    }
+    else {
+        $r = $c; $g = 0; $b = $x
+    }
+
+    return [System.Drawing.Color]::FromArgb(
+        [int](($r + $m) * 255),
+        [int](($g + $m) * 255),
+        [int](($b + $m) * 255)
+    )
+}
+
+# =========================
+# ボタン処理
+# =========================
+# ボタンクリックでクリップボード処理を実行
+$btn.Add_Click({ DoClip })
+
+# ボタン押下エフェクト
+# 押した瞬間だけ少し暗くして、押した感を出す
+$btn.Add_MouseDown({
+    $btn.BackColor = [System.Drawing.Color]::FromArgb(0,90,180)
+})
+$btn.Add_MouseUp({
+    $btn.BackColor = [System.Drawing.Color]::FromArgb(0,120,215)
+})
+
+# =========================
+# S3アラーム
+# =========================
+# 指定時刻になるとS3アラーム演出を動かす
+# F5を押すと、その時間帯だけ停止する
+$s3Hours = @(9,11,13,15,17,19)
+
+$form.Add_KeyDown({
+    if ($_.KeyCode -eq [System.Windows.Forms.Keys]::F5) {
+        $script:s3StopHr = (Get-Date).Hour
+    }
+})
+
+# フォームが暇なタイミングで繰り返し呼ばれるイベントを使って、
+# タイトルの長短切り替えと背景色変化を動かす
+[System.Windows.Forms.Application]::add_Idle({
+    $now  = Get-Date
+    $hour = $now.Hour
+
+    # 現在時刻が対象時間帯で、かつF5停止中ではない場合のみS3アラームON
+    $s3On = ($hour -in $s3Hours) -and ($hour -ne $script:s3StopHr)
+
+    if ($s3On) {
+        # 背景色をなめらかに変化
+        $form.BackColor = Hsv2Rgb $script:s3Hue 1 1
+        $script:s3Hue = ($script:s3Hue + 1) % 360
+
+        # 2秒ごとに短いタイトルと長いタイトルを切り替える
+        if (($now - $script:s3LastTgl).TotalSeconds -ge 2) {
+            $script:s3LongOn = -not $script:s3LongOn
+            $script:s3LastTgl = $now
+        }
+
+        if ($script:s3LongOn) {
+            $form.Text = $s3Long
+        } else {
+            $form.Text = $s3Short
+        }
+    }
+    else {
+        # 通常時は白背景と通常タイトルへ戻す
+        $form.BackColor = [System.Drawing.Color]::White
+        $form.Text = $ttlDef
+    }
+})
+
+# =========================
+# 初期配置・リサイズ
+# =========================
+# 初回レイアウト反映
+UpdLay
+
+# ウィンドウサイズ変更時も比率を維持して再配置
+$form.Add_Resize({
+    UpdLay
+})
+
+# 初期表示文字のフォントサイズも調整
+FitTxt $out.Text
+
+# =========================
+# 起動
+# =========================
+# フォームを表示してアプリを開始する
+[void]$form.ShowDialog()
