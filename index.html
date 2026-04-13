@@ -6,7 +6,7 @@ Add-Type -AssemblyName System.Drawing
 # =========================
 # 見た目や基本設定の定義
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "gogo Assist R ver0.1.8"
+$form.Text = "gogo Assist R ver0.1.9"
 $form.Size = New-Object System.Drawing.Size(420,360)
 $form.MinimumSize = New-Object System.Drawing.Size(320,240)
 $form.StartPosition = "CenterScreen"
@@ -15,24 +15,24 @@ $form.KeyPreview = $true
 $form.Font = New-Object System.Drawing.Font("Meiryo UI",10)
 
 # 通常時とS3アラーム時のタイトル
-$ttlDef	 = "gogo Assist R ver0.1.8"
-$s3Short = "S3アラーム"
-$s3Long	 = "<F5>を押して停止：S3アラーム！！！！"
+$ttldef	 = "gogo Assist R ver0.1.9"
+$s3short = "S3アラーム"
+$s3long	 = "<F5>を押して停止：S3アラーム！！！！"
 
 # 整形処理#5 の前回処理保持用
-$script:lastFmt = ""
+$script:lastfmt = ""
 
 # S3アラーム用の制御変数
-# s3StopHr  : F5を押した時間帯はS3演出を止めるために保持
-# s3Hue	   : 色相。これを進めてゲーミング化(?)
-# s3Lasttgl : タイトルの長短切り替え時刻
-# s3Longon  : 長いタイトルを表示中かどうか
-# s3On	  : 現在S3アラームを発火させるかどうか
-$script:s3StopHr  = -1
-$script:s3Hue	 = 0
-$script:s3Lasttgl = Get-Date
-$script:s3Longon  = $false
-$script:s3On	  = $false
+# s3stophr  : F5を押した時間帯はS3演出を止めるために保持
+# s3hue		: 色相。これを進めてゲーミング化(?)
+# s3lasttgl : タイトルの長短切り替え時刻
+# s3longon  : 長いタイトルを表示中かどうか
+# s3on		: 現在S3アラームを発火させるかどうか
+$script:s3stophr  = -1
+$script:s3hue	 = 0
+$script:s3lasttgl = Get-Date
+$script:s3longon  = $false
+$script:s3on	  = $false
 
 # 一時タイトル表示用
 # tmpttl   : 一時的に表示したいタイトル文字列
@@ -72,7 +72,7 @@ $form.Controls.Add($out)
 # 内容に応じてフォントサイズ調整
 # =========================
 # 文字列の長さとテキストボックスの大きさからフォントサイズを自動調整
-function fittxt($txt) {
+function Fittxt($txt) {
 
 	# 空の場合は標準サイズに戻して終了
 	if ([string]::IsNullOrWhiteSpace($txt)) {
@@ -81,8 +81,8 @@ function fittxt($txt) {
 	}
 
 	# 文字を描画できる実質的な領域を少し余白を引いて計算
-	$maxW = [Math]::Max(10, $out.ClientSize.Width - 10)
-	$maxH = [Math]::Max(10, $out.ClientSize.Height - 10)
+	$maxw = [Math]::Max(10, $out.ClientSize.Width - 10)
+	$maxh = [Math]::Max(10, $out.ClientSize.Height - 10)
 
 	# 基本は折り返しありで計算
 	$flags = [System.Windows.Forms.TextFormatFlags]::WordBreak
@@ -99,11 +99,11 @@ function fittxt($txt) {
 		$m = [System.Windows.Forms.TextRenderer]::MeasureText(
 			$txt,
 			$f,
-			(New-Object System.Drawing.Size($maxW, 1000)),
+			(New-Object System.Drawing.Size($maxw, 1000)),
 			$flags
 		)
 
-		if ($m.Width -le $maxW -and $m.Height -le $maxH) {
+		if ($m.Width -le $maxw -and $m.Height -le $maxh) {
 			$out.Font = $f
 			return
 		}
@@ -118,7 +118,7 @@ function fittxt($txt) {
 # =========================
 # ウィンドウサイズ変更時に、現在の比率を保ったまま
 # ボタンと結果欄の位置・サイズを再計算する
-function UpdLay {
+function Updlay {
 
 	# 外枠余白と、ボタンと結果欄の間隔
 	$mg = 20
@@ -131,33 +131,33 @@ function UpdLay {
 	$cw = $w - ($mg * 2)
 	if ($cw -lt 50) { $cw = 50 }
 
-	# 結果欄は小さめ固定寄りにし、上のボタンを大きく確保する
-	$outH = [int]($h * 0.14)
-	if ($outH -lt 40) { $outH = 40 }
-	if ($outH -gt 80) { $outH = 80 }
+	# 出力ボックス小さめ、ボタンを大きめ
+	$outh = [int]($h * 0.14)
+	if ($outh -lt 40) { $outh = 40 }
+	if ($outh -gt 80) { $outh = 80 }
 
 	# 残り領域をボタン高さに使う
-	$btnH = $h - ($mg * 2) - $sp - $outH
-	if ($btnH -lt 60) { $btnH = 60 }
+	$btnh = $h - ($mg * 2) - $sp - $outh
+	if ($btnh -lt 60) { $btnh = 60 }
 
-	# ボタンは上側に配置
+	# ボタンの配置(上)
 	$btn.Location = New-Object System.Drawing.Point($mg, $mg)
-	$btn.Size	 = New-Object System.Drawing.Size($cw, $btnH)
+	$btn.Size	 = New-Object System.Drawing.Size($cw, $btnh)
 
-	# 結果欄はボタンの下に配置
-	$outY = $mg + $btnH + $sp
-	$out.Location = New-Object System.Drawing.Point($mg, $outY)
-	$out.Size	 = New-Object System.Drawing.Size($cw, $outH)
+	# 出力テキストボックスの配置(下)
+	$outy = $mg + $btnh + $sp
+	$out.Location = New-Object System.Drawing.Point($mg, $outy)
+	$out.Size	 = New-Object System.Drawing.Size($cw, $outh)
 
-	# サイズが変わったのでフォントも再調整する
-	fittxt $out.Text
+	# サイズが変わったらフォントを再調整
+	Fittxt $out.Text
 }
 
 # =========================
 # 一時タイトル表示
 # =========================
-# 指定したメッセージを、一定時間だけウィンドウタイトルに表示する
-function tmpttl($msg) {
+# 指定したメッセージを、一定時間だけタイトルに表示
+function Tmpttl($msg) {
 	$script:tmpttl   = $msg
 	$script:tmpttlto = (Get-Date).AddMilliseconds(900)
 }
@@ -168,7 +168,7 @@ function tmpttl($msg) {
 # 可能な限り対応して DateTimeとして認識させる。
 # 年ありは yyyy/MM/dd HH:mm
 # 年なしは MM/dd HH:mm
-function ConvSubDate($txt) {
+function Convsubdate($txt) {
 
 	$src = $txt.Trim()
 	if ([string]::IsNullOrWhiteSpace($src)) {
@@ -185,10 +185,10 @@ function ConvSubDate($txt) {
 	# 曜日など括弧内表記を削除
 	$src = $src -replace '\s*\([^)]*\)\s*', ' '
 
-	# 「14時半」などを「14時30分」へ寄せる
+	# 半の処理。　例:「14時半」→「14時30分」
 	$src = $src -replace '(\d{1,2})時半', '$1時30分'
 
-	# 和文の日付記号を一般的な形へ寄せる
+	# 和文の日付記号の変換
 	# 例: 2026年4月7日 14時30分 → 2026/4/7 14:30
 	$src = $src -replace '年', '/'
 	$src = $src -replace '月', '/'
@@ -200,17 +200,17 @@ function ConvSubDate($txt) {
 	$src = $src -replace '\s{2,}', ' '
 	$src = $src.Trim()
 
-	# 「14時」→ 前処理後は「14:」になるので 14:00 に補完
+	# 「14時」が 前処理で「14:」になるので 14:00 に補完
 	$src = $src -replace '(\s\d{1,2}):$', '$1:00'
 
-	$fmtsY = @(
+	$fmtsy = @(
 		'yyyy/M/d H:mm',
 		'yyyy/M/d HH:mm',
 		'yyyy/MM/dd H:mm',
 		'yyyy/MM/dd HH:mm'
 	)
 
-	$fmtsN = @(
+	$fmtsn = @(
 		'M/d H:mm',
 		'MM/dd H:mm',
 		'M/d HH:mm',
@@ -221,7 +221,7 @@ function ConvSubDate($txt) {
 	$dt = [datetime]::MinValue
 
 	# 年ありで解釈
-	foreach ($f in $fmtsY) {
+	foreach ($f in $fmtsy) {
 		if ([datetime]::TryParseExact($src, $f, $ci, [System.Globalization.DateTimeStyles]::None, [ref]$dt)) {
 			return @{
 				Result = $dt.ToString('yyyy/MM/dd HH:mm')
@@ -231,7 +231,7 @@ function ConvSubDate($txt) {
 	}
 
 	# 年なしで解釈
-	foreach ($f in $fmtsN) {
+	foreach ($f in $fmtsn) {
 		if ([datetime]::TryParseExact($src, $f, $ci, [System.Globalization.DateTimeStyles]::None, [ref]$dt)) {
 			return @{
 				Result = $dt.ToString('MM/dd HH:mm')
@@ -248,13 +248,13 @@ function ConvSubDate($txt) {
 # =========================
 # クリップボードから取得した文字列を見て、
 # どのパターンに当てはまるかを判定し、整形後の文字列と種別を返す
-function FmtTxt($txt) {
+function Fmttxt($txt) {
 
 	# 前後の余分な空白や改行を削る
 	$txt = $txt.Trim()
 
 	# 現在年は「年が今と違う場合だけ先頭にyyを付ける」判定に使う
-	$nowYear = (Get-Date).Year
+	$nowyear = (Get-Date).Year
 
 	# 整形処理
 	# 1) 曜日削除
@@ -317,12 +317,12 @@ function FmtTxt($txt) {
 	#
 	# 前回の処理が #4 の「cronID削除」だった場合のみ動かす
 	if (
-		$script:lastFmt -eq "cron_cut" -and
+		$script:lastfmt -eq "cron_cut" -and
 		$txt -match '^(\d{4})/(\d{2})/(\d{2})[　 ](\d{2}):(\d{2})$'
 	) {
 		$yy = [int]$matches[1]
 
-		if ($yy -eq $nowYear) {
+		if ($yy -eq $nowyear) {
 			$res = "$($matches[2]).$($matches[3]).$($matches[4]).$($matches[5])"
 		} else {
 			$y2  = $matches[1].Substring(2,2)
@@ -337,13 +337,13 @@ function FmtTxt($txt) {
 
 	# Excel用日時変換
 	# 例:2026年4月7日 14時		→ 2026/04/07 14:00
-	#　　2026年4月7日(火) 14時30分	→ 2026/04/07 14:30
-	#　　4月7日(火) 13時30分	→ 04/07 13:30
-	#　　4/7 (火)13:30		→ 04/07 13:30
+	#	 2026年4月7日(火) 14時30分 → 2026/04/07 14:30
+	#	 4月7日(火) 13時30分	  → 04/07 13:30
+	#	 4/7 (火)13:30			→ 04/07 13:30
 	#
 	# 年ありは yyyy/MM/dd HH:mm
 	# 年なしは MM/dd HH:mm
-	$sub = ConvSubDate $txt
+	$sub = Convsubdate $txt
 	if ($null -ne $sub) {
 		return $sub
 	}
@@ -356,12 +356,12 @@ function FmtTxt($txt) {
 # =========================
 # クリップボードから文字列を取得し、
 # 整形対象なら整形・再コピー、未対応ならそのまま表示する
-function DoClip {
+function Doclip {
 
 	# 画像やファイルなど、テキスト以外は処理しない
 	if (-not [System.Windows.Forms.Clipboard]::ContainsText()) {
 		$out.Text = "クリップボードがテキストじゃありません"
-		fittxt $out.Text
+		Fittxt $out.Text
 		return
 	}
 
@@ -371,20 +371,20 @@ function DoClip {
 	# 空文字や空白だけなら終了
 	if ([string]::IsNullOrWhiteSpace($clip)) {
 		$out.Text = "クリップボードが空です。"
-		fittxt $out.Text
+		Fittxt $out.Text
 		return
 	}
 
 	# 整形判定を実施
-	$r = FmtTxt $clip
+	$r = Fmttxt $clip
 
 	# 未対応なら前回整形種別をリセットして、
 	# クリップボードの中身をそのまま表示・再設定する
 	if ($null -eq $r) {
-		$script:lastFmt = ""
+		$script:lastfmt = ""
 		Set-Clipboard $clip
 		$out.Text = $clip
-		fittxt $clip
+		Fittxt $clip
 		return
 	}
 
@@ -393,25 +393,25 @@ function DoClip {
 	$type = [string]$r.Type
 
 	# 次回の判定で使うため、今回の整形種別を保存しておく
-	$script:lastFmt = $type
+	$script:lastfmt = $type
 
 	# 整形後の結果をクリップボードへ戻す
 	Set-Clipboard $res
 
 	# 種別ごとに一時タイトルを出し分ける
 	switch ($type) {
-		"mail_del" { tmpttl "メールアドレスを削除しました" }
-		"wd_del"   { tmpttl "曜日を削除しました" }
-		"cron_con" { tmpttl "cronIDを変換しました" }
-		"cron_cut" { tmpttl "cronIDを削除しました" }
-		"sch_fmt"  { tmpttl "スケジュール用に変換しました" }
-		"sub_dt"   { tmpttl "Excel用日時に変換しました。" }
+		"mail_del" { Tmpttl "メールアドレスを削除しました" }
+		"wd_del"   { Tmpttl "曜日を削除しました" }
+		"cron_con" { Tmpttl "cronIDを変換しました" }
+		"cron_cut" { Tmpttl "cronIDを削除しました" }
+		"sch_fmt"  { Tmpttl "スケジュール用に変換しました" }
+		"sub_dt"   { Tmpttl "Excel用日時に変換しました。" }
 		default {}
 	}
 
 	# 結果の表示
 	$out.Text = $res
-	fittxt $res
+	Fittxt $res
 }
 
 # =========================
@@ -419,7 +419,7 @@ function DoClip {
 # =========================
 # S3アラーム時の色変化用。
 # 色相(H)を少しずつ進めて色を変更する
-function Hsv2Rgb($h, $s, $v) {
+function Hsv2rgb($h, $s, $v) {
 	$c = $v * $s
 	$x = $c * (1 - [math]::Abs((($h / 60.0) % 2) - 1))
 	$m = $v - $c
@@ -454,7 +454,7 @@ function Hsv2Rgb($h, $s, $v) {
 # ボタン処理
 # =========================
 # ボタンクリックでクリップボード処理を実行
-$btn.Add_Click({ DoClip })
+$btn.Add_Click({ Doclip })
 
 # ボタン押下エフェクト
 # 押した瞬間だけ少し暗くして、押した感を出す
@@ -470,32 +470,32 @@ $btn.Add_MouseUp({
 # =========================
 # 指定時刻になるとS3アラーム演出を動かす
 # F5を押すと、その時間帯だけ停止する
-$s3Hours = @(9,11,13,15,17,19)
+$s3hours = @(9,11,13,15,17,19)
 
 $form.Add_KeyDown({
 	if ($_.KeyCode -eq [System.Windows.Forms.Keys]::F5) {
-		$script:s3StopHr = (Get-Date).Hour
+		$script:s3stophr = (Get-Date).Hour
 	}
 })
 
 # S3アラーム発火判定タイマー
 # 発火判定だけを一定間隔で実施する
-$script:s3JudgeTmr = New-Object System.Windows.Forms.Timer
-$script:s3JudgeTmr.Interval = 250
+$script:s3judgetmr = New-Object System.Windows.Forms.Timer
+$script:s3judgetmr.Interval = 250
 
-$script:s3JudgeTmr.Add_Tick({
+$script:s3judgetmr.Add_Tick({
 	$now  = Get-Date
 	$hour = $now.Hour
 
-	$script:s3On = ($hour -in $s3Hours) -and ($hour -ne $script:s3StopHr)
+	$script:s3on = ($hour -in $s3hours) -and ($hour -ne $script:s3stophr)
 })
 
-$script:s3JudgeTmr.Start()
+$script:s3judgetmr.Start()
 
 $form.Add_FormClosed({
-	if ($script:s3JudgeTmr) {
-		$script:s3JudgeTmr.Stop()
-		$script:s3JudgeTmr.Dispose()
+	if ($script:s3judgetmr) {
+		$script:s3judgetmr.Stop()
+		$script:s3judgetmr.Dispose()
 	}
 })
 
@@ -505,28 +505,28 @@ $form.Add_FormClosed({
 	$now = Get-Date
 
 	# 一時タイトル表示中かどうか
-	$tmpOn = ($now -lt $script:tmpttlto)
+	$tmpon = ($now -lt $script:tmpttlto)
 
-	if ($script:s3On) {
+	if ($script:s3on) {
 		# 背景色の変化
-		$form.BackColor = Hsv2Rgb $script:s3Hue 1 1
-		$script:s3Hue = ($script:s3Hue + 1) % 360
+		$form.BackColor = Hsv2rgb $script:s3hue 1 1
+		$script:s3hue = ($script:s3hue + 1) % 360
 
 		# 2秒ごとに短いタイトルと長いタイトルを切り替える
-		if (($now - $script:s3Lasttgl).TotalSeconds -ge 2) {
-			$script:s3Longon = -not $script:s3Longon
-			$script:s3Lasttgl = $now
+		if (($now - $script:s3lasttgl).TotalSeconds -ge 2) {
+			$script:s3longon = -not $script:s3longon
+			$script:s3lasttgl = $now
 		}
 
 		# 一時タイトルが出ている間はそちらを優先
-		if ($tmpOn) {
+		if ($tmpon) {
 			$form.Text = $script:tmpttl
 		}
-		elseif ($script:s3Longon) {
-			$form.Text = $s3Long
+		elseif ($script:s3longon) {
+			$form.Text = $s3long
 		}
 		else {
-			$form.Text = $s3Short
+			$form.Text = $s3short
 		}
 	}
 	else {
@@ -534,11 +534,11 @@ $form.Add_FormClosed({
 		$form.BackColor = [System.Drawing.Color]::White
 
 		# 一時タイトルが出ている間はそちらを優先
-		if ($tmpOn) {
+		if ($tmpon) {
 			$form.Text = $script:tmpttl
 		}
 		else {
-			$form.Text = $ttlDef
+			$form.Text = $ttldef
 		}
 	}
 })
@@ -547,15 +547,15 @@ $form.Add_FormClosed({
 # 初期配置・リサイズ
 # =========================
 # 初回レイアウト反映
-UpdLay
+Updlay
 
 # ウィンドウサイズ変更時も比率を維持して再配置
 $form.Add_Resize({
-	UpdLay
+	Updlay
 })
 
 # 初期表示文字のフォントサイズも調整
-fittxt $out.Text
+Fittxt $out.Text
 
 # =========================
 # 起動
