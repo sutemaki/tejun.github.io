@@ -5,7 +5,8 @@ function Convsubdate($txt) {
 		return $null
 	}
 
-	# 全角数字・全角記号をできるだけ半角へ寄せる
+	# Unicode正規化
+	# （）、：、０～９や全角ブランク等を半角に
 	$src = $src.Normalize([System.Text.NormalizationForm]::FormKC)
 
 	# 曜日など括弧内表記を削除
@@ -28,5 +29,4 @@ function Convsubdate($txt) {
 	# 「14時」→ 前処理後は「14:」になるので 14:00 に補完
 	$src = $src -replace '(\s\d{1,2}):$', '$1:00'
 
-	...
-}
+
