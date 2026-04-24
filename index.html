@@ -1,109 +1,12 @@
+$btn.Add_MouseDown({
+	Doclip
+})
 
-
-
-# =========================
-# クリップボード書き込み
-# =========================
-# クリップボードが一時的に他アプリに使われている場合があるため、
-# 少し待ちながら数回リトライして書き込む
-function Setcliptxt($txt) {
-
-	for ($i = 0; $i -lt 8; $i++) {
-		try {
-			# 文字列をクリップボードへ格納
-			[System.Windows.Forms.Clipboard]::SetText($txt)
-
-			# 書き込み後に読み直して、意図した内容が入ったか確認
-			if ([System.Windows.Forms.Clipboard]::ContainsText()) {
-				$chk = [System.Windows.Forms.Clipboard]::GetText()
-				if ($chk -eq $txt) {
-					return $true
-				}
-			}
-		}
-		catch {
-			# 一時的な失敗は握りつぶして再試行
-		}
-
-		# 少し待ってから再試行
-		Start-Sleep -Milliseconds 60
+$btn.Add_KeyDown({
+	if (
+		$_.KeyCode -eq [System.Windows.Forms.Keys]::Enter -or
+		$_.KeyCode -eq [System.Windows.Forms.Keys]::Space
+	) {
+		Doclip
 	}
-
-	# 最後まで成功しなければ失敗
-	return $false
-}
-
-
-
-
-Set-Clipboard $clip
-を
-[void](Setcliptxt $clip)
-に
-
-
-
-
-
-function Doclip {
-
-	# 画像やファイルなど、テキスト以外は処理しない
-	if (-not [System.Windows.Forms.Clipboard]::ContainsText()) {
-		$out.Text = "クリップボードがテキストじゃありません"
-		Fittxt $out.Text
-		return
-	}
-
-	# テキストのそのまま取得する。
-	$clip = Get-Clipboard -Raw
-
-	# 空文字や空白だけなら終了
-	if ([string]::IsNullOrWhiteSpace($clip)) {
-		$out.Text = "クリップボードが空です。"
-		Fittxt $out.Text
-		return
-	}
-
-	# 整形判定を実施
-	$r = Fmttxt $clip
-
-	# 未対応なら前回整形種別をリセットして、
-	# クリップボードの中身をそのまま表示・再設定する
-	if ($null -eq $r) {
-		$script:lastfmt = ""
-		[void](Setcliptxt $clip)
-		$out.Text = $clip
-		Fittxt $clip
-		return
-	}
-
-	# 整形後の文字列と種別を取り出す
-	$res  = [string]$r.Result
-	$type = [string]$r.Type
-
-	# 次回の判定で使うため、今回の整形種別を保存しておく
-	$script:lastfmt = $type
-
-	# 整形後の結果をクリップボードへ戻す
-	$ok = Setcliptxt $res
-
-	# 失敗時は失敗メッセージ、成功時は通常メッセージ
-	if (-not $ok) {
-		Tmpttl "クリップボード格納に失敗しました"
-	}
-	else {
-		switch ($type) {
-			"mail_del" { Tmpttl "メールアドレスを削除しました" }
-			"wd_del"   { Tmpttl "曜日を削除しました" }
-			"cron_con" { Tmpttl "cronIDを変換しました" }
-			"cron_cut" { Tmpttl "cronIDを削除しました" }
-			"sch_fmt"  { Tmpttl "スケジュール用に変換しました" }
-			"sub_dt"   { Tmpttl "Excel用日時に変換しました。" }
-			default {}
-		}
-	}
-
-	# 結果の表示
-	$out.Text = $res
-	Fittxt $res
-}
+})
