@@ -28,5 +28,74 @@ function Setcliptxt($txt) {
 
 
 
+Set-Clipboard $clip
+を
+[void](Setcliptxt $clip)
+に
 
 
+
+
+
+function Doclip {
+
+	# 画像やファイルなど、テキスト以外は処理しない
+	if (-not [System.Windows.Forms.Clipboard]::ContainsText()) {
+		$out.Text = "クリップボードがテキストじゃありません"
+		Fittxt $out.Text
+		return
+	}
+
+	# テキストのそのまま取得する。
+	$clip = Get-Clipboard -Raw
+
+	# 空文字や空白だけなら終了
+	if ([string]::IsNullOrWhiteSpace($clip)) {
+		$out.Text = "クリップボードが空です。"
+		Fittxt $out.Text
+		return
+	}
+
+	# 整形判定を実施
+	$r = Fmttxt $clip
+
+	# 未対応なら前回整形種別をリセットして、
+	# クリップボードの中身をそのまま表示・再設定する
+	if ($null -eq $r) {
+		$script:lastfmt = ""
+		[void](Setcliptxt $clip)
+		$out.Text = $clip
+		Fittxt $clip
+		return
+	}
+
+	# 整形後の文字列と種別を取り出す
+	$res  = [string]$r.Result
+	$type = [string]$r.Type
+
+	# 次回の判定で使うため、今回の整形種別を保存しておく
+	$script:lastfmt = $type
+
+	# 整形後の結果をクリップボードへ戻す
+	$ok = Setcliptxt $res
+
+	# 失敗時は失敗メッセージ、成功時は通常メッセージ
+	if (-not $ok) {
+		Tmpttl "クリップボード格納に失敗しました"
+	}
+	else {
+		switch ($type) {
+			"mail_del" { Tmpttl "メールアドレスを削除しました" }
+			"wd_del"   { Tmpttl "曜日を削除しました" }
+			"cron_con" { Tmpttl "cronIDを変換しました" }
+			"cron_cut" { Tmpttl "cronIDを削除しました" }
+			"sch_fmt"  { Tmpttl "スケジュール用に変換しました" }
+			"sub_dt"   { Tmpttl "Excel用日時に変換しました。" }
+			default {}
+		}
+	}
+
+	# 結果の表示
+	$out.Text = $res
+	Fittxt $res
+}
