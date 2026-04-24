@@ -1,1 +1,32 @@
+# =========================
+# クリップボード書き込み
+# =========================
+# クリップボードが一時的に他アプリに使われている場合があるため、
+# 少し待ちながら数回リトライして書き込む
+function Setcliptxt($txt) {
+
+	for ($i = 0; $i -lt 8; $i++) {
+		try {
+			[System.Windows.Forms.Clipboard]::SetText($txt)
+
+			# 書き込み後に確認
+			if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+				$chk = [System.Windows.Forms.Clipboard]::GetText()
+				if ($chk -eq $txt) {
+					return $true
+				}
+			}
+		}
+		catch {
+		}
+
+		Start-Sleep -Milliseconds 60
+	}
+
+	return $false
+}
+
+
+
+
 
