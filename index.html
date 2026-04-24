@@ -1,3 +1,6 @@
+
+
+
 # =========================
 # クリップボード書き込み
 # =========================
@@ -7,9 +10,10 @@ function Setcliptxt($txt) {
 
 	for ($i = 0; $i -lt 8; $i++) {
 		try {
+			# 文字列をクリップボードへ格納
 			[System.Windows.Forms.Clipboard]::SetText($txt)
 
-			# 書き込み後に確認
+			# 書き込み後に読み直して、意図した内容が入ったか確認
 			if ([System.Windows.Forms.Clipboard]::ContainsText()) {
 				$chk = [System.Windows.Forms.Clipboard]::GetText()
 				if ($chk -eq $txt) {
@@ -18,13 +22,17 @@ function Setcliptxt($txt) {
 			}
 		}
 		catch {
+			# 一時的な失敗は握りつぶして再試行
 		}
 
+		# 少し待ってから再試行
 		Start-Sleep -Milliseconds 60
 	}
 
+	# 最後まで成功しなければ失敗
 	return $false
 }
+
 
 
 
