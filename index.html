@@ -1,12 +1,70 @@
-$btn.Add_MouseDown({
-	Doclip
-})
+触る場所
+今のスクリプトなら、主にここです。
 
-$btn.Add_KeyDown({
-	if (
-		$_.KeyCode -eq [System.Windows.Forms.Keys]::Enter -or
-		$_.KeyCode -eq [System.Windows.Forms.Keys]::Space
-	) {
-		Doclip
-	}
-})
+
+変数定義のところ
+
+
+Setcliptxt() の近く
+
+
+Doclip() の「成功時にクリップボードへ戻す」直後
+
+
+FormClosed の後始末
+
+
+
+追加するもの
+変数
+tmpttl の変数があるあたりに、これを追加します。
+# クリップボード監視用$script:clipkeep    = ""$script:clipwatchto = [datetime]::MinValue$script:clipfixing  = $false
+
+監視タイマー
+Setcliptxt() の下あたりに、これを追加します。
+# =========================# クリップボード監視# =========================# 変換後しばらくの間だけ監視し、他で上書きされたら戻す$script:clipwatchtmr = New-Object System.Windows.Forms.Timer$script:clipwatchtmr.Interval = 200$script:clipwatchtmr.Add_Tick({	if ($script:clipfixing) {		return	}	# 監視時間を過ぎたら停止	if ((Get-Date) -ge $script:clipwatchto) {		$script:clipwatchtmr.Stop()		return	}	try {		if ([System.Windows.Forms.Clipboard]::ContainsText()) {			$nowtxt = [System.Windows.Forms.Clipboard]::GetText()			# 変わっていたら戻す			if ($nowtxt -ne $script:clipkeep) {				$script:clipfixing = $true				[void](Setcliptxt $script:clipkeep)				$script:clipfixing = $false				Tmpttl "クリップボードを再格納しました"			}		}	}	catch {	}})function Startclipwatch($txt) {	$script:clipkeep    = $txt	$script:clipwatchto = (Get-Date).AddMilliseconds(1800)	$script:clipwatchtmr.Stop()	$script:clipwatchtmr.Start()}
+
+Doclip() の修正
+今の Doclip() の中で、ここがあります。
+# 整形後の結果をクリップボードへ戻すSet-Clipboard $res
+今はもう Setcliptxt にしていると思うので、その成功時の直後にこれを入れます。
+# 整形後の結果をクリップボードへ戻す$ok = Setcliptxt $resif (-not $ok) {	Tmpttl "クリップボード格納に失敗しました"}else {	Startclipwatch $res	switch ($type) {		"mail_del" { Tmpttl "メールアドレスを削除しました" }		"wd_del"   { Tmpttl "曜日を削除しました" }		"cron_con" { Tmpttl "cronIDを変換しました" }		"cron_cut" { Tmpttl "cronIDを削除しました" }		"sch_fmt"  { Tmpttl "スケジュール用に変換しました" }		"sub_dt"   { Tmpttl "Excel用日時に変換しました。" }		default {}	}}
+要点は、成功したら Startclipwatch $res を呼ぶことです。
+
+終了時の後始末
+FormClosed にこれも追加しておくと安全です。
+if ($script:clipwatchtmr) {	$script:clipwatchtmr.Stop()	$script:clipwatchtmr.Dispose()}
+
+これで何が分かるか
+この修正を入れると、
+
+
+Outlookを触っても何も起きなければ
+→ 上書きなし
+
+
+Outlookを触った直後に変わって、再格納メッセージが出るなら
+→ Outlook操作起点の上書きが原因
+
+
+とかなりはっきりします。
+
+一番重要なポイント
+今までの Setcliptxt() は、
+
+
+書く
+
+
+すぐ読む
+
+
+一致していたら成功
+
+
+だけでした。
+でも今回の症状は
+「後から変わる」
+なので、短時間の監視を追加しないと見つけにくかった、ということです。
+
+必要なら次に、今の ver0.1.10 ベースでこの監視機能まで入れた完成版差し替えコードをそのまま出します。
