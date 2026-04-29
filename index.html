@@ -1,3 +1,14 @@
+# スクリプト自身の最終更新日時からバージョン文字列を作る
+$scriptpath = $PSCommandPath
+$verdate = (Get-Item $scriptpath).LastWriteTime.ToString("yyyyMMdd")
+
+# 通常時とS3アラーム時のタイトル
+$ttldef  = "gogo Assist R ver0$verdate"
+$s3short = "S3アラーム"
+$s3long  = "<F5>を押して停止：S3アラーム！！！！"
+
+$form.Text = $ttldef
+
 # =========================
 # ボタン
 # =========================
