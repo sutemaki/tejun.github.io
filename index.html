@@ -1,67 +1,3 @@
-$senttxt = $sent.ToString("yyyyMMddHHmm")
-を
-$cij = [System.Globalization.CultureInfo]::GetCultureInfo("ja-JP")
-$senttxt = $sent.ToString("yyyy/MM/dd (ddd) HH:mm", $cij)
-に
-
-
-function Getxlbinfo {
-
-	try {
-		$xl = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
-	}
-	catch {
-		return $null
-	}
-
-	try {
-		# ブック名を固定で取得
-		$wb = $xl.Workbooks("gogo.xls")
-		if ($null -eq $wb) {
-			return $null
-		}
-
-		# そのブックのアクティブシートを対象にする
-		$ws = $wb.ActiveSheet
-		if ($null -eq $ws) {
-			return $null
-		}
-
-		# B列の最終行を取得
-		$lastrow = $ws.Cells($ws.Rows.Count, 2).End(-4162).Row
-
-		# B列の最終行セル自体が空なら有効データなし扱い
-		$bval = $ws.Cells($lastrow, 2).Value2
-		if ([string]::IsNullOrWhiteSpace([string]$bval)) {
-			return $null
-		}
-
-		# 同じ行のA列を取得して3桁化
-		$aval = $ws.Cells($lastrow, 1).Value2
-		if ([string]::IsNullOrWhiteSpace([string]$aval)) {
-			return $null
-		}
-
-		$anum = [int][double]$aval
-		$a3 = ('{0:D3}' -f $anum)
-
-		return @{
-			Lastrow = $lastrow
-			A3	  = $a3
-		}
-	}
-	catch {
-		return $null
-	}
-}
-
-
-
-
-
-
-
-
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -70,7 +6,7 @@ Add-Type -AssemblyName System.Drawing
 # =========================
 # 見た目や基本設定の定義
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "gogo Assist R ver0.1.13"
+$form.Text = "gogo Assist R ver0.1.14"
 $form.Size = New-Object System.Drawing.Size(420,360)
 $form.MinimumSize = New-Object System.Drawing.Size(320,240)
 $form.StartPosition = "CenterScreen"
@@ -79,7 +15,7 @@ $form.KeyPreview = $true
 $form.Font = New-Object System.Drawing.Font("Meiryo UI",10)
 
 # 通常時とS3アラーム時のタイトル
-$ttldef	 = "gogo Assist R ver0.1.13"
+$ttldef	 = "gogo Assist R ver0.1.14"
 $s3short = "S3アラーム"
 $s3long	 = "<F5>を押して停止：S3アラーム！！！！"
 
@@ -111,6 +47,14 @@ $script:tmpttlto = [datetime]::MinValue
 $script:clipkeep	= ""
 $script:clipwatchto = [datetime]::MinValue
 $script:clipfixing	= $false
+
+# 自動変換用
+# autoon	   : 自動変換のON/OFF
+# autolastclip : 前回監視したクリップボード文字列
+# autoworking  : 自動変換中の再入防止
+$script:autoon	   = $false
+$script:autolastclip = ""
+$script:autoworking  = $false
 
 # =========================
 # ボタン
@@ -278,6 +222,9 @@ function Startclipwatch($txt) {
 	$script:clipkeep	= $txt
 	$script:clipwatchto = (Get-Date).AddMilliseconds(1800)
 
+	# 自動変換側にも最新値を覚えさせる
+	$script:autolastclip = $txt
+
 	# いったん止めてから再開して、監視期間を最新の変換に合わせ直す
 	$script:clipwatchtmr.Stop()
 	$script:clipwatchtmr.Start()
@@ -362,8 +309,9 @@ function Convsubdate($txt) {
 # =========================
 # Excel B列最終行取得
 # =========================
-# 開いているExcelのアクティブシートを対象に、
-# B列の最終行を見つけ、その行のA列の値を3桁数字へ整形して返す
+# 開いている Excel の gogo.xls を対象に、
+# そのブックのアクティブシートで B列の最終行を見つけ、
+# その行のA列の値を3桁数字へ整形して返す
 function Getxlbinfo {
 
 	try {
@@ -374,7 +322,14 @@ function Getxlbinfo {
 	}
 
 	try {
-		$ws = $xl.ActiveSheet
+		# ブック名を固定で取得
+		$wb = $xl.Workbooks("gogo.xls")
+		if ($null -eq $wb) {
+			return $null
+		}
+
+		# そのブックのアクティブシートを対象にする
+		$ws = $wb.ActiveSheet
 		if ($null -eq $ws) {
 			return $null
 		}
@@ -476,7 +431,8 @@ function Dobkey {
 
 	try {
 		$sent = [datetime]$mail.SentOn
-		$senttxt = $sent.ToString("yyyyMMddHHmm")
+		$cij = [System.Globalization.CultureInfo]::GetCultureInfo("ja-JP")
+		$senttxt = $sent.ToString("yyyy/MM/dd (ddd) HH:mm", $cij)
 	}
 	catch {
 		Tmpttl "Outlook送信日時の取得に失敗しました"
@@ -647,12 +603,102 @@ $script:clipwatchtmr.Add_Tick({
 				[void](Setcliptxt $script:clipkeep)
 				$script:clipfixing = $false
 
+				# 自動変換側にも最新値を覚えさせる
+				$script:autolastclip = $script:clipkeep
+
 				Tmpttl "クリップボードを再格納しました"
 			}
 		}
 	}
 	catch {
 		# 監視中の一時的な例外は無視
+	}
+})
+
+# =========================
+# 自動変換監視タイマー
+# =========================
+# Ctrl+Shift+A で自動変換ONの時だけ動く
+# クリップボードの新しい文字列を見て、
+# mail_del と wd_del に一致した時だけ自動変換して再格納する
+$script:autotmr = New-Object System.Windows.Forms.Timer
+$script:autotmr.Interval = 250
+
+$script:autotmr.Add_Tick({
+
+	if (-not $script:autoon) {
+		return
+	}
+
+	# 自動変換中の再入防止
+	if ($script:autoworking) {
+		return
+	}
+
+	try {
+		# テキスト以外は対象外
+		if (-not [System.Windows.Forms.Clipboard]::ContainsText()) {
+			return
+		}
+
+		$clip = [System.Windows.Forms.Clipboard]::GetText()
+
+		# 前回と同じ内容なら何もしない
+		if ($clip -eq $script:autolastclip) {
+			return
+		}
+
+		# 今回見た内容として先に保持
+		$script:autolastclip = $clip
+
+		# 整形判定
+		$r = Fmttxt $clip
+		if ($null -eq $r) {
+			return
+		}
+
+		$type = [string]$r.Type
+		$res  = [string]$r.Result
+
+		# 自動対象は mail_del / wd_del のみ
+		if ($type -ne "mail_del" -and $type -ne "wd_del") {
+			return
+		}
+
+		# 変換前後が同じなら何もしない
+		if ($res -eq $clip) {
+			return
+		}
+
+		$script:autoworking = $true
+		$ok = Setcliptxt $res
+		$script:autoworking = $false
+
+		if (-not $ok) {
+			Tmpttl "自動変換の格納に失敗しました"
+			return
+		}
+
+		# 再度同じ変換が走らないように、最新値として更新
+		$script:autolastclip = $res
+
+		# 監視付きで保持
+		Startclipwatch $res
+
+		# 表示更新
+		$out.Text = $res
+		Fittxt $res
+
+		# タイトル表示
+		if ($type -eq "mail_del") {
+			Tmpttl "自動変換: メールアドレスを削除しました"
+		}
+		elseif ($type -eq "wd_del") {
+			Tmpttl "自動変換: 曜日を削除しました"
+		}
+	}
+	catch {
+		$script:autoworking = $false
 	}
 })
 
@@ -688,6 +734,7 @@ function Doclip {
 	if ($null -eq $r) {
 		$script:lastfmt = ""
 		[void](Setcliptxt $clip)
+		$script:autolastclip = $clip
 		$out.Text = $clip
 		Fittxt $clip
 		return
@@ -794,8 +841,9 @@ $btn.Add_KeyDown({
 $s3hours = @(9,11,13,15,17,19)
 
 # フォーム側でキーを拾う
-# Enter は通常変換
-# B は Excel + Outlook から文字列作成
+# Enter			 : 通常変換
+# Ctrl+Shift+A	 : 自動変換 ON/OFF
+# Ctrl+Shift+B	 : Excel + Outlook 文字列作成
 $form.Add_KeyDown({
 	if ($_.KeyCode -eq [System.Windows.Forms.Keys]::F5) {
 		$script:s3stophr = (Get-Date).Hour
@@ -805,7 +853,47 @@ $form.Add_KeyDown({
 		$_.Handled = $true
 		Doclip
 	}
-	elseif ($_.KeyCode -eq [System.Windows.Forms.Keys]::B) {
+	elseif (
+		$_.KeyCode -eq [System.Windows.Forms.Keys]::A -and
+		$_.Control -and
+		$_.Shift
+	) {
+		$_.SuppressKeyPress = $true
+		$_.Handled = $true
+
+		$script:autoon = -not $script:autoon
+
+		if ($script:autoon) {
+			# ONにした瞬間の現在値を基準にする
+			if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+				$script:autolastclip = [System.Windows.Forms.Clipboard]::GetText()
+			}
+			else {
+				$script:autolastclip = ""
+			}
+
+			$script:autotmr.Start()
+			Tmpttl "自動変換ON"
+		}
+		else {
+			$script:autotmr.Stop()
+			$script:autoworking = $false
+
+			if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+				$script:autolastclip = [System.Windows.Forms.Clipboard]::GetText()
+			}
+			else {
+				$script:autolastclip = ""
+			}
+
+			Tmpttl "自動変換OFF"
+		}
+	}
+	elseif (
+		$_.KeyCode -eq [System.Windows.Forms.Keys]::B -and
+		$_.Control -and
+		$_.Shift
+	) {
 		$_.SuppressKeyPress = $true
 		$_.Handled = $true
 		Dobkey
@@ -835,6 +923,11 @@ $form.Add_FormClosed({
 	if ($script:clipwatchtmr) {
 		$script:clipwatchtmr.Stop()
 		$script:clipwatchtmr.Dispose()
+	}
+
+	if ($script:autotmr) {
+		$script:autotmr.Stop()
+		$script:autotmr.Dispose()
 	}
 })
 
