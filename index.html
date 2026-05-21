@@ -1,1 +1,96 @@
 
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Files
+)
+
+foreach ($FilePath in $Files) {
+
+    if (-not (Test-Path $FilePath)) {
+        continue
+    }
+
+    $OutFile = Join-Path `
+        (Split-Path $FilePath -Parent) `
+        ("{0}_clean{1}" -f `
+            [IO.Path]::GetFileNameWithoutExtension($FilePath),
+            [IO.Path]::GetExtension($FilePath))
+
+    $Result = foreach ($Line in (Get-Content $FilePath)) {
+
+        $Fixed = $Line
+        $Len = $Line.Length
+
+        if ($Len -gt 1 -and ($Len % 2) -eq 0) {
+
+            $Half = $Len / 2
+
+            if (
+                $Line.Substring(0, $Half) -eq
+                $Line.Substring($Half)
+            ) {
+                $Fixed = $Line.Substring(0, $Half)
+            }
+        }
+
+        $Fixed
+    }
+
+    $Result | Set-Content $OutFile -Encoding UTF8
+}
+
+pause
+
+
+ああああああああああああああああ
+安全版
+
+
+
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Files
+)
+
+foreach ($FilePath in $Files) {
+
+    if (-not (Test-Path $FilePath)) {
+        continue
+    }
+
+    $OutFile = Join-Path `
+        (Split-Path $FilePath -Parent) `
+        ("{0}_safe_clean{1}" -f `
+            [IO.Path]::GetFileNameWithoutExtension($FilePath),
+            [IO.Path]::GetExtension($FilePath))
+
+    $Result = foreach ($Line in (Get-Content $FilePath)) {
+
+        $Fixed = $Line
+        $Len = $Line.Length
+
+        if ($Len -gt 1 -and ($Len % 2) -eq 0) {
+
+            $Half = $Len / 2
+
+            $Left  = $Line.Substring(0, $Half)
+            $Right = $Line.Substring($Half)
+
+            if ($Left -eq $Right) {
+
+                if (
+                    $Left -match '^[a-zA-Z0-9_\-./ ]+$' -and
+                    ($Left.Contains(' ') -or $Left.Length -le 20)
+                ) {
+                    $Fixed = $Left
+                }
+            }
+        }
+
+        $Fixed
+    }
+
+    $Result | Set-Content $OutFile -Encoding UTF8
+}
+
+pause
