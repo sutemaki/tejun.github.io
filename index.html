@@ -47,6 +47,33 @@ pause
 
 
 
+# ==========================================
+# Tera Term ログ 二重エコー除去（安全版）
+#
+# 使い方：
+#   ログファイルを本スクリプトへ
+#   ドラッグ＆ドロップする
+#
+# 出力：
+#   元ファイルと同じフォルダへ
+#   「_safe_clean」を付与したファイルを作成
+#
+# 例：
+#   server.log
+#     ↓
+#   server_safe_clean.log
+#
+# 対象：
+#   [user@host ~]# lsls
+#   [user@host ~]$ pwdpwd
+#
+# 結果：
+#   [user@host ~]# ls
+#   [user@host ~]$ pwd
+#
+# 実行結果部分は変更しない
+# ==========================================
+
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Files
@@ -55,34 +82,38 @@ param(
 foreach ($FilePath in $Files) {
 
     if (-not (Test-Path $FilePath)) {
+        Write-Host "ファイルが見つかりません: $FilePath"
         continue
     }
 
     $OutFile = Join-Path `
         (Split-Path $FilePath -Parent) `
         ("{0}_safe_clean{1}" -f `
-            [IO.Path]::GetFileNameWithoutExtension($FilePath),
-            [IO.Path]::GetExtension($FilePath))
+            [System.IO.Path]::GetFileNameWithoutExtension($FilePath),
+            [System.IO.Path]::GetExtension($FilePath))
 
     $Result = foreach ($Line in (Get-Content $FilePath)) {
 
         $Fixed = $Line
-        $Len = $Line.Length
 
-        if ($Len -gt 1 -and ($Len % 2) -eq 0) {
+        # Linuxプロンプト行を判定
+        if ($Line -match '^(\[[^\]]+@[^\]]+\]\s*[#$]\s*)(.*)$') {
 
-            $Half = $Len / 2
+            $Prompt = $Matches[1]
+            $Cmd    = $Matches[2]
 
-            $Left  = $Line.Substring(0, $Half)
-            $Right = $Line.Substring($Half)
+            $Len = $Cmd.Length
 
-            if ($Left -eq $Right) {
+            # コマンド部分のみ二重判定
+            if ($Len -gt 1 -and ($Len % 2) -eq 0) {
 
-                if (
-                    $Left -match '^[a-zA-Z0-9_\-./ ]+$' -and
-                    ($Left.Contains(' ') -or $Left.Length -le 20)
-                ) {
-                    $Fixed = $Left
+                $Half = $Len / 2
+
+                $Left  = $Cmd.Substring(0, $Half)
+                $Right = $Cmd.Substring($Half)
+
+                if ($Left -eq $Right) {
+                    $Fixed = $Prompt + $Left
                 }
             }
         }
@@ -91,6 +122,10 @@ foreach ($FilePath in $Files) {
     }
 
     $Result | Set-Content $OutFile -Encoding UTF8
+
+    Write-Host "出力完了: $OutFile"
 }
 
+Write-Host ""
+Write-Host "全処理完了"
 pause
