@@ -1,10 +1,10 @@
 =LET(
-c,IFERROR('[26年申請台帳.xlsx]書出し設定申請'!C5:C20000,""),
-d,IFERROR('[26年申請台帳.xlsx]書出し設定申請'!D5:D20000,""),
-e,IFERROR('[26年申請台帳.xlsx]書出し設定申請'!E5:E20000,""),
-n,IFERROR('[26年申請台帳.xlsx]書出し設定申請'!N5:N20000,""),
-r,IFERROR('[26年申請台帳.xlsx]書出し設定申請'!R5:R20000,""),
-cnt,MAP(c,e,LAMBDA(cc,ee,COUNTIFS(c,cc,e,ee))),
+c,[26年度申請台帳.xlsx]書出し設定申請!C5:C20000,
+d,[26年度申請台帳.xlsx]書出し設定申請!D5:D20000,
+e,[26年度申請台帳.xlsx]書出し設定申請!E5:E20000,
+n,[26年度申請台帳.xlsx]書出し設定申請!N5:N20000,
+r,[26年度申請台帳.xlsx]書出し設定申請!R5:R20000,
+cnt,MAP(c,e,n,LAMBDA(cc,ee,nn,SUM((c=cc)*(e=ee)*(n=nn)))),
 base,IF(r="",c,r),
 limit,MAP(base,cnt,LAMBDA(dt,num,IF(num>=2,EDATE(dt,2),dt+7))),
 FILTER(
