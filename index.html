@@ -1,26 +1,18 @@
-Sub 指定行のE列を選択()
-
-	Dim wsList As Worksheet
-	Dim wsTarget As Worksheet
-	Dim c As Range
-	Dim rng As Range
-
-	Set wsList = ThisWorkbook.ActiveSheet
-	Set wsTarget = Workbooks("26年度申請台帳.xlsx").Worksheets("書出し設定申請")
-
-	For Each c In wsList.Range("A1:A319")
-		If IsNumeric(c.Value) And c.Value <> "" Then
-			If rng Is Nothing Then
-				Set rng = wsTarget.Cells(CLng(c.Value), "E")
-			Else
-				Set rng = Union(rng, wsTarget.Cells(CLng(c.Value), "E"))
-			End If
-		End If
-	Next c
-
-	If Not rng Is Nothing Then
-		wsTarget.Activate
-		rng.Select
-	End If
-
-End Sub
+=LET(
+e,IFERROR('[26年度申請台帳.xlsx]書出し設定申請'!E5:E20000,""),
+g,IFERROR('[26年度申請台帳.xlsx]書出し設定申請'!G5:G20000,""),
+c,IFERROR('[26年度申請台帳.xlsx]書出し設定申請'!C5:C20000,""),
+s,IFERROR('[26年度申請台帳.xlsx]書出し設定申請'!D5:D20000,""),
+u,UNIQUE(FILTER(HSTACK(e,g,c),(e<>"")*(g<>"")*(c<>""))),
+r,FILTER(
+u,
+MAP(CHOOSECOLS(u,1),CHOOSECOLS(u,2),CHOOSECOLS(u,3),
+LAMBDA(id,k,dt,
+SUMPRODUCT(--(e=id),--(g=k),--(c=dt))
+=
+SUMPRODUCT(--(e=id),--(g=k),--(c=dt),--(s="作業部署承認"))
+)),
+"該当なし"
+),
+CHOOSECOLS(r,1,2)
+)
