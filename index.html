@@ -1,53 +1,892 @@
-currentStep = "元シートを新規ブックへコピー"
-srcWs.Copy
+Option Explicit
 
-currentStep = "D列：否認の削除"
-DeleteRowsMatching ws, 4, Array("否認"), True
+Private Const SRC_BOOK As String = "26年度申請台帳.xlsx"
+Private Const SRC_SHEET As String = "書出し設定申請"
 
-currentStep = "S列：作業日の入力"
-FillWorkDate ws, workDate
+Private Const FILTER_ROW As Long = 3
+Private Const FIRST_DATA_ROW As Long = 5
 
-currentStep = "項番行の削除"
-DeleteItemOnlyRows ws
+Private gCurrentStep As String
 
-currentStep = "N列・S列の並べ替え"
-'ここに現在のSort処理
 
-currentStep = "V～Z列の削除"
-ws.Columns("V:Z").Delete
+'==========================================================
+' メイン
+'==========================================================
+Public Sub 書出し設定申請_作業ブック作成()
 
-currentStep = "仮想端末シートの作成"
-CreateFilteredSheet ws, wb, 14, Array("0", "-"), "仮想端末"
+    Dim srcWb As Workbook
+    Dim srcWs As Worksheet
 
-currentStep = "元シートから仮想端末を削除"
-DeleteRowsMatching ws, 14, Array("0", "-"), True
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim tmpWs As Worksheet
 
-currentStep = "N列の重複削除"
-'RemoveDuplicates処理
+    Dim lastRow As Long
+    Dim workDate As Date
+    Dim inputDate As Variant
 
-currentStep = "アンインストールシート作成"
-CreateFilteredSheet ws, wb, 10, _
-    Array("6. アンインストール/書出し制限再設定", "6. アンインストール"), _
-    "アンインストール"
+    Dim oldCalc As XlCalculation
+    Dim oldScreen As Boolean
+    Dim oldEvents As Boolean
+    Dim oldAlerts As Boolean
+    Dim oldStatusBar As Variant
 
-currentStep = "書き出し制限解除シート作成"
-CreateFilteredSheet ws, wb, 10, _
-    Array("5. 書出し制限解除"), _
-    "書き出し制限解除"
+    Dim stateSaved As Boolean
 
-currentStep = "標準秘文シート作成"
-CreateFilteredSheet ws, wb, 10, _
-    Array("1. 標準秘文（日）", "2. 標準秘文（英）"), _
-    "標準秘文"
 
-currentStep = "平文書き出し秘文シート作成"
-CreateFilteredSheet ws, wb, 10, _
-    Array("3. 平文書出し秘文"), _
-    "平文書き出し秘文"
+    '==================================================
+    ' 作業日
+    '==========================================================
+    inputDate = Application.InputBox( _
+        Prompt:="作業日を入力してください。", _
+        Title:="作業日の入力", _
+        Default:=Format(Date, "yyyy/mm/dd"), _
+        Type:=2)
 
-currentStep = "オフライン秘文シート作成"
-CreateFilteredSheet ws, wb, 10, _
-    Array("4. オフライン秘文"), _
-    "オフライン秘文"
+    If VarType(inputDate) = vbBoolean Then
+        If inputDate = False Then Exit Sub
+    End If
 
-currentStep = "フィルターの再設定"
+    If Not IsDate(inputDate) Then
+
+        MsgBox _
+            "日付を正しく入力してください。", _
+            vbExclamation
+
+        Exit Sub
+
+    End If
+
+    workDate = DateValue(CDate(inputDate))
+
+
+    '==================================================
+    ' 元ブック
+    '==========================================================
+    On Error Resume Next
+    Set srcWb = Workbooks(SRC_BOOK)
+    On Error GoTo 0
+
+    If srcWb Is Nothing Then
+
+        MsgBox _
+            SRC_BOOK & " を開いてから実行してください。", _
+            vbExclamation
+
+        Exit Sub
+
+    End If
+
+
+    '==================================================
+    ' 元シート
+    '==========================================================
+    On Error Resume Next
+    Set srcWs = srcWb.Worksheets(SRC_SHEET)
+    On Error GoTo 0
+
+    If srcWs Is Nothing Then
+
+        MsgBox _
+            "シート「" & SRC_SHEET & "」が見つかりません。", _
+            vbExclamation
+
+        Exit Sub
+
+    End If
+
+
+    If srcWs.ProtectContents Then
+
+        MsgBox _
+            "シート「" & SRC_SHEET & "」が保護されています。" & vbCrLf & _
+            "シート保護を解除してから実行してください。", _
+            vbExclamation
+
+        Exit Sub
+
+    End If
+
+
+    '==================================================
+    ' Excel状態保存
+    '==========================================================
+    oldCalc = Application.Calculation
+    oldScreen = Application.ScreenUpdating
+    oldEvents = Application.EnableEvents
+    oldAlerts = Application.DisplayAlerts
+    oldStatusBar = Application.StatusBar
+
+    stateSaved = True
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    Application.Calculation = xlCalculationManual
+
+    On Error GoTo ErrorHandler
+
+
+    '==================================================
+    ' 0. 元シートを新規ブックへコピー
+    '==========================================================
+    SetStatus "元シートを新規ブックへコピー"
+
+    srcWs.Copy
+
+    Set wb = ActiveWorkbook
+    Set ws = wb.Worksheets(1)
+
+    ws.Name = SRC_SHEET
+
+    ClearFilter ws
+
+
+    '==================================================
+    ' 2. D列「否認」を削除
+    '==========================================================
+    SetStatus "D列「否認」の削除"
+
+    DeleteRowsMatching _
+        ws, _
+        4, _
+        Array("否認"), _
+        True
+
+
+    '==================================================
+    ' 3. S列が空欄の申請へ作業日を入力
+    '    項番のみの行は除外
+    '==========================================================
+    SetStatus "S列へ作業日を入力"
+
+    FillWorkDate ws, workDate
+
+
+    '==================================================
+    ' 4. A列だけ入力されている項番行を削除
+    '==========================================================
+    SetStatus "項番のみの行を削除"
+
+    DeleteItemOnlyRows ws
+
+
+    '==================================================
+    ' 5.
+    ' N列：昇順
+    ' S列：新しい順
+    '==========================================================
+    SetStatus "N列・S列の並べ替え"
+
+    lastRow = LastUsedRow(ws)
+
+    If lastRow >= FIRST_DATA_ROW Then
+
+        ws.Range( _
+            ws.Cells(FIRST_DATA_ROW, 1), _
+            ws.Cells(lastRow, 26) _
+        ).Sort _
+            Key1:=ws.Cells(FIRST_DATA_ROW, 14), _
+            Order1:=xlAscending, _
+            Key2:=ws.Cells(FIRST_DATA_ROW, 19), _
+            Order2:=xlDescending, _
+            Header:=xlNo, _
+            MatchCase:=False, _
+            Orientation:=xlTopToBottom, _
+            DataOption1:=xlSortTextAsNumbers, _
+            DataOption2:=xlSortNormal
+
+    End If
+
+
+    '==================================================
+    ' 6. V～Z列削除
+    '==========================================================
+    SetStatus "V～Z列の削除"
+
+    ws.Columns("V:Z").Delete
+
+
+    '==================================================
+    ' 8. 仮想端末シート作成
+    '    N列 = 0 または -
+    '==========================================================
+    SetStatus "仮想端末シート作成"
+
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        14, _
+        Array("0", "-"), _
+        "仮想端末"
+
+
+    '==================================================
+    ' 9. 元シートから仮想端末削除
+    '==========================================================
+    SetStatus "元シートからN列「0」「-」を削除"
+
+    DeleteRowsMatching _
+        ws, _
+        14, _
+        Array("0", "-"), _
+        True
+
+
+    '==================================================
+    ' 7・10相当
+    '
+    ' N列の同じIT資産No.について
+    ' 最新の1件だけ残す
+    '
+    ' S列を新しい順にしてあるので
+    ' RemoveDuplicatesで先頭＝最新が残る
+    '==========================================================
+    SetStatus "IT資産No.の重複データを整理"
+
+    lastRow = LastUsedRow(ws)
+
+    If lastRow >= FIRST_DATA_ROW Then
+
+        ws.Range( _
+            ws.Cells(FIRST_DATA_ROW, 1), _
+            ws.Cells(lastRow, 21) _
+        ).RemoveDuplicates _
+            Columns:=14, _
+            Header:=xlNo
+
+    End If
+
+
+    '==================================================
+    ' 11. アンインストール
+    '==========================================================
+    SetStatus "アンインストールシート作成"
+
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "6. アンインストール/書出し制限再設定", _
+            "6. アンインストール" _
+        ), _
+        "アンインストール"
+
+
+    '==================================================
+    ' 12. 書き出し制限解除
+    '==========================================================
+    SetStatus "書き出し制限解除シート作成"
+
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "5. 書出し制限解除" _
+        ), _
+        "書き出し制限解除"
+
+
+    '==================================================
+    ' 13. 標準秘文
+    '==========================================================
+    SetStatus "標準秘文シート作成"
+
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "1. 標準秘文（日）", _
+            "2. 標準秘文（英）" _
+        ), _
+        "標準秘文"
+
+
+    '==================================================
+    ' 14. 平文書き出し秘文
+    '==========================================================
+    SetStatus "平文書き出し秘文シート作成"
+
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "3. 平文書出し秘文" _
+        ), _
+        "平文書き出し秘文"
+
+
+    '==================================================
+    ' 15. オフライン秘文
+    '==========================================================
+    SetStatus "オフライン秘文シート作成"
+
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "4. オフライン秘文" _
+        ), _
+        "オフライン秘文"
+
+
+    '==================================================
+    ' 全シートのフィルターを3行目へ設定
+    '==========================================================
+    SetStatus "フィルターを再設定"
+
+    For Each tmpWs In wb.Worksheets
+        ResetFilter tmpWs
+    Next tmpWs
+
+
+    '==================================================
+    ' 完了
+    '==========================================================
+    SetStatus "完了"
+
+    ws.Activate
+    ws.Range("A1").Select
+
+    Application.CutCopyMode = False
+
+    RestoreApplication _
+        oldCalc, _
+        oldScreen, _
+        oldEvents, _
+        oldAlerts, _
+        oldStatusBar
+
+    MsgBox _
+        "作業用ブックを作成しました。" & vbCrLf & vbCrLf & _
+        "・元の26年度申請台帳.xlsxは変更していません。" & vbCrLf & _
+        "・条件付き書式はシート複製により引き継いでいます。" & vbCrLf & _
+        "・作成されたブックはまだ保存されていません。", _
+        vbInformation
+
+    Exit Sub
+
+
+'==========================================================
+' エラー
+'==========================================================
+ErrorHandler:
+
+    Dim errNo As Long
+    Dim errText As String
+    Dim errStep As String
+
+    errNo = Err.Number
+    errText = Err.Description
+    errStep = gCurrentStep
+
+    Application.CutCopyMode = False
+
+    If stateSaved Then
+
+        RestoreApplication _
+            oldCalc, _
+            oldScreen, _
+            oldEvents, _
+            oldAlerts, _
+            oldStatusBar
+
+    End If
+
+    MsgBox _
+        "処理中にエラーが発生しました。" & vbCrLf & vbCrLf & _
+        "処理：" & errStep & vbCrLf & _
+        "エラー番号：" & errNo & vbCrLf & _
+        "内容：" & errText & vbCrLf & vbCrLf & _
+        "途中まで作成されたブックは保存せず閉じてください。", _
+        vbCritical
+
+End Sub
+
+
+'==========================================================
+' 処理状況
+'==========================================================
+Private Sub SetStatus(ByVal text As String)
+
+    gCurrentStep = text
+    Application.StatusBar = "処理中：" & text
+
+End Sub
+
+
+'==========================================================
+' Excel状態復元
+'==========================================================
+Private Sub RestoreApplication( _
+    ByVal oldCalc As XlCalculation, _
+    ByVal oldScreen As Boolean, _
+    ByVal oldEvents As Boolean, _
+    ByVal oldAlerts As Boolean, _
+    ByVal oldStatusBar As Variant)
+
+    Application.Calculation = oldCalc
+    Application.ScreenUpdating = oldScreen
+    Application.EnableEvents = oldEvents
+    Application.DisplayAlerts = oldAlerts
+    Application.StatusBar = oldStatusBar
+
+End Sub
+
+
+'==========================================================
+' 最終使用行
+'==========================================================
+Private Function LastUsedRow( _
+    ByVal ws As Worksheet _
+) As Long
+
+    Dim c As Range
+
+    Set c = ws.Cells.Find( _
+        What:="*", _
+        After:=ws.Cells(1, 1), _
+        LookIn:=xlFormulas, _
+        LookAt:=xlPart, _
+        SearchOrder:=xlByRows, _
+        SearchDirection:=xlPrevious)
+
+    If c Is Nothing Then
+        LastUsedRow = FIRST_DATA_ROW - 1
+    Else
+        LastUsedRow = c.Row
+    End If
+
+End Function
+
+
+'==========================================================
+' フィルター解除
+'==========================================================
+Private Sub ClearFilter(ByVal ws As Worksheet)
+
+    On Error Resume Next
+
+    If ws.FilterMode Then
+        ws.ShowAllData
+    End If
+
+    On Error GoTo 0
+
+End Sub
+
+
+'==========================================================
+' 3行目へフィルター設定
+'==========================================================
+Private Sub ResetFilter(ByVal ws As Worksheet)
+
+    Dim lastRow As Long
+
+    ClearFilter ws
+
+    If ws.AutoFilterMode Then
+        ws.AutoFilterMode = False
+    End If
+
+    lastRow = LastUsedRow(ws)
+
+    If lastRow < FILTER_ROW Then
+        lastRow = FILTER_ROW
+    End If
+
+    ws.Range( _
+        ws.Cells(FILTER_ROW, 1), _
+        ws.Cells(lastRow, 21) _
+    ).AutoFilter
+
+End Sub
+
+
+'==========================================================
+' 項番行判定
+'
+' A列：入力あり
+' B～Z：すべて空欄
+'==========================================================
+Private Function IsItemOnlyRow( _
+    ByVal ws As Worksheet, _
+    ByVal rowNo As Long _
+) As Boolean
+
+    If Len(Trim$(CStr(ws.Cells(rowNo, 1).Value2))) = 0 Then
+
+        IsItemOnlyRow = False
+        Exit Function
+
+    End If
+
+    IsItemOnlyRow = _
+        (Application.CountA( _
+            ws.Range( _
+                ws.Cells(rowNo, 2), _
+                ws.Cells(rowNo, 26) _
+            ) _
+        ) = 0)
+
+End Function
+
+
+'==========================================================
+' S列の空欄へ作業日
+'==========================================================
+Private Sub FillWorkDate( _
+    ByVal ws As Worksheet, _
+    ByVal workDate As Date _
+)
+
+    Dim lastRow As Long
+    Dim r As Long
+
+    lastRow = LastUsedRow(ws)
+
+    If lastRow < FIRST_DATA_ROW Then Exit Sub
+
+    For r = FIRST_DATA_ROW To lastRow
+
+        If Len(CStr(ws.Cells(r, 19).Value2)) = 0 Then
+
+            If Not IsItemOnlyRow(ws, r) Then
+                ws.Cells(r, 19).Value = workDate
+            End If
+
+        End If
+
+    Next r
+
+End Sub
+
+
+'==========================================================
+' 項番だけの行削除
+'==========================================================
+Private Sub DeleteItemOnlyRows(ByVal ws As Worksheet)
+
+    Dim lastRow As Long
+    Dim r As Long
+
+    Dim blockTop As Long
+    Dim blockBottom As Long
+
+    lastRow = LastUsedRow(ws)
+
+    If lastRow < FIRST_DATA_ROW Then Exit Sub
+
+
+    For r = lastRow To FIRST_DATA_ROW Step -1
+
+        If IsItemOnlyRow(ws, r) Then
+
+            If blockBottom = 0 Then
+
+                blockTop = r
+                blockBottom = r
+
+            ElseIf r = blockTop - 1 Then
+
+                blockTop = r
+
+            Else
+
+                ws.Rows( _
+                    blockTop & ":" & blockBottom _
+                ).Delete
+
+                blockTop = r
+                blockBottom = r
+
+            End If
+
+        Else
+
+            If blockBottom <> 0 Then
+
+                ws.Rows( _
+                    blockTop & ":" & blockBottom _
+                ).Delete
+
+                blockTop = 0
+                blockBottom = 0
+
+            End If
+
+        End If
+
+    Next r
+
+
+    If blockBottom <> 0 Then
+
+        ws.Rows( _
+            blockTop & ":" & blockBottom _
+        ).Delete
+
+    End If
+
+End Sub
+
+
+'==========================================================
+' 指定した値に一致する行 / 一致しない行を削除
+'
+' deleteMatch=True
+'   指定値に一致する行を削除
+'
+' deleteMatch=False
+'   指定値に一致しない行を削除
+'==========================================================
+Private Sub DeleteRowsMatching( _
+    ByVal ws As Worksheet, _
+    ByVal colNo As Long, _
+    ByVal values As Variant, _
+    ByVal deleteMatch As Boolean _
+)
+
+    Dim lastRow As Long
+    Dim arr As Variant
+
+    Dim i As Long
+    Dim rowNo As Long
+
+    Dim matched As Boolean
+    Dim doDelete As Boolean
+
+    Dim blockTop As Long
+    Dim blockBottom As Long
+
+
+    lastRow = LastUsedRow(ws)
+
+    If lastRow < FIRST_DATA_ROW Then Exit Sub
+
+
+    arr = ws.Range( _
+        ws.Cells(FIRST_DATA_ROW, colNo), _
+        ws.Cells(lastRow, colNo) _
+    ).Value2
+
+
+    ' 1セルだけの場合
+    If lastRow = FIRST_DATA_ROW Then
+
+        matched = ValueInList(arr, values)
+
+        If deleteMatch Then
+            doDelete = matched
+        Else
+            doDelete = Not matched
+        End If
+
+        If doDelete Then
+            ws.Rows(FIRST_DATA_ROW).Delete
+        End If
+
+        Exit Sub
+
+    End If
+
+
+    ' 複数行
+    For i = UBound(arr, 1) To 1 Step -1
+
+        rowNo = FIRST_DATA_ROW + i - 1
+
+        matched = ValueInList( _
+            arr(i, 1), _
+            values)
+
+        If deleteMatch Then
+            doDelete = matched
+        Else
+            doDelete = Not matched
+        End If
+
+
+        If doDelete Then
+
+            If blockBottom = 0 Then
+
+                blockTop = rowNo
+                blockBottom = rowNo
+
+            ElseIf rowNo = blockTop - 1 Then
+
+                blockTop = rowNo
+
+            Else
+
+                ws.Rows( _
+                    blockTop & ":" & blockBottom _
+                ).Delete
+
+                blockTop = rowNo
+                blockBottom = rowNo
+
+            End If
+
+        Else
+
+            If blockBottom <> 0 Then
+
+                ws.Rows( _
+                    blockTop & ":" & blockBottom _
+                ).Delete
+
+                blockTop = 0
+                blockBottom = 0
+
+            End If
+
+        End If
+
+    Next i
+
+
+    If blockBottom <> 0 Then
+
+        ws.Rows( _
+            blockTop & ":" & blockBottom _
+        ).Delete
+
+    End If
+
+End Sub
+
+
+'==========================================================
+' 値が指定リスト内に存在するか
+'==========================================================
+Private Function ValueInList( _
+    ByVal target As Variant, _
+    ByVal values As Variant _
+) As Boolean
+
+    Dim v As Variant
+    Dim targetText As String
+
+    If IsError(target) Then
+        ValueInList = False
+        Exit Function
+    End If
+
+    targetText = Trim$(CStr(target))
+
+    For Each v In values
+
+        If StrComp( _
+            targetText, _
+            Trim$(CStr(v)), _
+            vbBinaryCompare _
+        ) = 0 Then
+
+            ValueInList = True
+            Exit Function
+
+        End If
+
+    Next v
+
+    ValueInList = False
+
+End Function
+
+
+'==========================================================
+' シート丸ごと複製して対象データだけ残す
+'
+' Range.Copyは使用しない
+' 条件付き書式・罫線・列幅等を維持
+'==========================================================
+Private Sub CreateFilteredSheet( _
+    ByVal srcWs As Worksheet, _
+    ByVal wb As Workbook, _
+    ByVal colNo As Long, _
+    ByVal values As Variant, _
+    ByVal newName As String _
+)
+
+    Dim outWs As Worksheet
+
+
+    gCurrentStep = newName & "：シートを複製"
+    Application.StatusBar = _
+        "処理中：" & gCurrentStep
+
+
+    ' 同名シートが存在した場合の安全対策
+    If SheetExists(wb, newName) Then
+
+        Err.Raise _
+            vbObjectError + 1000, _
+            , _
+            "シート「" & newName & "」が既に存在します。"
+
+    End If
+
+
+    ' シート自体を複製
+    srcWs.Copy _
+        After:=wb.Worksheets(wb.Worksheets.Count)
+
+    Set outWs = _
+        wb.Worksheets(wb.Worksheets.Count)
+
+    outWs.Name = newName
+
+
+    gCurrentStep = _
+        newName & "：対象外データを削除"
+
+    Application.StatusBar = _
+        "処理中：" & gCurrentStep
+
+
+    ClearFilter outWs
+
+    DeleteRowsMatching _
+        outWs, _
+        colNo, _
+        values, _
+        False
+
+
+    gCurrentStep = _
+        newName & "：フィルター設定"
+
+    Application.StatusBar = _
+        "処理中：" & gCurrentStep
+
+    ResetFilter outWs
+
+End Sub
+
+
+'==========================================================
+' シート存在確認
+'==========================================================
+Private Function SheetExists( _
+    ByVal wb As Workbook, _
+    ByVal sheetName As String _
+) As Boolean
+
+    Dim ws As Worksheet
+
+    On Error Resume Next
+
+    Set ws = wb.Worksheets(sheetName)
+
+    On Error GoTo 0
+
+    SheetExists = Not ws Is Nothing
+
+End Function
