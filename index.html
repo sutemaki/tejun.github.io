@@ -6,10 +6,12 @@ Private Const SRC_SHEET As String = "書出し設定申請"
 Private Const FILTER_ROW As Long = 3
 Private Const FIRST_DATA_ROW As Long = 5
 
+
 Sub 書出し設定申請_作業ブック作成()
 
     Dim srcWb As Workbook
     Dim srcWs As Worksheet
+
     Dim wb As Workbook
     Dim ws As Worksheet
 
@@ -20,11 +22,13 @@ Sub 書出し設定申請_作業ブック作成()
     Dim oldCalc As XlCalculation
     Dim oldScreen As Boolean
     Dim oldEvents As Boolean
+    Dim oldAlerts As Boolean
 
     '==================================================
     ' 作業日の入力
     '==================================================
     Do
+
         inputDate = InputBox( _
             Prompt:="作業日を入力してください。", _
             Title:="作業日の入力", _
@@ -38,7 +42,9 @@ Sub 書出し設定申請_作業ブック作成()
         End If
 
         MsgBox "日付を正しく入力してください。", vbExclamation
+
     Loop
+
 
     '==================================================
     ' 元ブック確認
@@ -48,70 +54,99 @@ Sub 書出し設定申請_作業ブック作成()
     On Error GoTo 0
 
     If srcWb Is Nothing Then
-        MsgBox SRC_BOOK & " を開いてから実行してください。", vbExclamation
+
+        MsgBox _
+            SRC_BOOK & " を開いてから実行してください。", _
+            vbExclamation
+
         Exit Sub
+
     End If
+
 
     On Error Resume Next
     Set srcWs = srcWb.Worksheets(SRC_SHEET)
     On Error GoTo 0
 
     If srcWs Is Nothing Then
-        MsgBox "シート「" & SRC_SHEET & "」が見つかりません。", vbExclamation
+
+        MsgBox _
+            "シート「" & SRC_SHEET & "」が見つかりません。", _
+            vbExclamation
+
         Exit Sub
+
     End If
 
+
     '==================================================
-    ' 高速化
+    ' Excel設定保存
     '==================================================
     oldCalc = Application.Calculation
     oldScreen = Application.ScreenUpdating
     oldEvents = Application.EnableEvents
+    oldAlerts = Application.DisplayAlerts
 
     Application.ScreenUpdating = False
     Application.EnableEvents = False
+    Application.DisplayAlerts = False
     Application.Calculation = xlCalculationManual
 
     On Error GoTo ErrorHandler
 
+
     '==================================================
-    ' 1. 元シートを新規ブックへコピー
+    ' 0.
+    ' 書出し設定申請を新規ブックへコピー
+    '
+    ' シート自体のコピーなので
+    ' 条件付き書式等もそのまま引き継ぐ
     '==================================================
     srcWs.Copy
 
     Set wb = ActiveWorkbook
     Set ws = wb.Worksheets(1)
 
+    ws.Name = SRC_SHEET
+
     ClearFilter ws
 
-    lastRow = LastUsedRow(ws)
 
     '==================================================
-    ' 2. D列「否認」を削除
+    ' 2.
+    ' D列：否認 を削除
     '==================================================
-    DeleteFilteredRows ws, 4, "否認", 26
+    DeleteRowsMatching _
+        ws, _
+        4, _
+        Array("否認"), _
+        True
 
-    lastRow = LastUsedRow(ws)
 
     '==================================================
-    ' 3. S列が空欄の申請へ作業日を入力
+    ' 3.
+    ' S列が空欄の申請へ作業日入力
     '
-    ' 項番だけの行には入力しない
+    ' 項番だけの行は除外
     '==================================================
     FillWorkDate ws, workDate
 
+
     '==================================================
-    ' 4. 項番だけの行を削除
+    ' 4.
+    ' A列のみ値あり、
+    ' B～Z列がすべて空欄の項番行を削除
     '==================================================
     DeleteItemOnlyRows ws
 
-    lastRow = LastUsedRow(ws)
 
     '==================================================
     ' 5.
     ' N列：昇順
     ' S列：新しい順
     '==================================================
+    lastRow = LastUsedRow(ws)
+
     If lastRow >= FIRST_DATA_ROW Then
 
         With ws.Sort
@@ -119,18 +154,24 @@ Sub 書出し設定申請_作業ブック作成()
             .SortFields.Clear
 
             .SortFields.Add _
-                Key:=ws.Range("N" & FIRST_DATA_ROW & ":N" & lastRow), _
+                Key:=ws.Range( _
+                    "N" & FIRST_DATA_ROW & _
+                    ":N" & lastRow), _
                 SortOn:=xlSortOnValues, _
                 Order:=xlAscending, _
                 DataOption:=xlSortTextAsNumbers
 
             .SortFields.Add _
-                Key:=ws.Range("S" & FIRST_DATA_ROW & ":S" & lastRow), _
+                Key:=ws.Range( _
+                    "S" & FIRST_DATA_ROW & _
+                    ":S" & lastRow), _
                 SortOn:=xlSortOnValues, _
                 Order:=xlDescending, _
                 DataOption:=xlSortNormal
 
-            .SetRange ws.Range("A" & FIRST_DATA_ROW & ":Z" & lastRow)
+            .SetRange ws.Range( _
+                "A" & FIRST_DATA_ROW & _
+                ":Z" & lastRow)
 
             .Header = xlNo
             .MatchCase = False
@@ -142,30 +183,53 @@ Sub 書出し設定申請_作業ブック作成()
 
     End If
 
+
     '==================================================
-    ' 6. V～Z列削除
+    ' 6.
+    ' V～Z列削除
     '==================================================
     ws.Columns("V:Z").Delete
 
-    lastRow = LastUsedRow(ws)
 
     '==================================================
-    ' 8～9.
-    ' N列 0 / - を仮想端末へコピーして元から削除
+    ' 8.
+    ' N列 = 0 / -
+    ' 仮想端末シートへ
+    '
+    ' シートを丸ごと複製してから
+    ' 対象外の行を削除
     '==================================================
-    ExtractVirtual ws, wb
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        14, _
+        Array("0", "-"), _
+        "仮想端末"
 
-    lastRow = LastUsedRow(ws)
+
+    '==================================================
+    ' 9.
+    ' 元シートから
+    ' N列 = 0 / - を削除
+    '==================================================
+    DeleteRowsMatching _
+        ws, _
+        14, _
+        Array("0", "-"), _
+        True
+
 
     '==================================================
     ' 7・10 相当
     '
-    ' N列で同じIT資産No.がある場合、
-    ' S列の最新データだけ残す
+    ' N列の同一IT資産No.は
+    ' 最初の1件だけ残す
     '
-    ' 事前にS列を新しい順にしてあるため、
-    ' 重複削除で先頭＝最新が残る
+    ' S列を新しい順に並べ替え済みなので
+    ' 最初の1件 = 最新
     '==================================================
+    lastRow = LastUsedRow(ws)
+
     If lastRow >= FIRST_DATA_ROW Then
 
         ws.Range( _
@@ -177,57 +241,93 @@ Sub 書出し設定申請_作業ブック作成()
 
     End If
 
+
     '==================================================
-    ' 11. アンインストール
+    ' 11.
+    ' アンインストール
     '==================================================
-    CopyCategory _
-        ws, wb, _
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
         Array( _
             "6. アンインストール/書出し制限再設定", _
             "6. アンインストール" _
         ), _
         "アンインストール"
 
-    '==================================================
-    ' 12. 書き出し制限解除
-    '==================================================
-    CopyCategory _
-        ws, wb, _
-        Array("5. 書出し制限解除"), _
-        "書き出し制限解除"
 
     '==================================================
-    ' 13. 標準秘文
+    ' 12.
+    ' 書き出し制限解除
     '==================================================
-    CopyCategory _
-        ws, wb, _
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "5. 書出し制限解除" _
+        ), _
+        "書き出し制限解除"
+
+
+    '==================================================
+    ' 13.
+    ' 標準秘文
+    '==================================================
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
         Array( _
             "1. 標準秘文（日）", _
             "2. 標準秘文（英）" _
         ), _
         "標準秘文"
 
+
     '==================================================
-    ' 14. 平文書き出し秘文
+    ' 14.
+    ' 平文書き出し秘文
     '==================================================
-    CopyCategory _
-        ws, wb, _
-        Array("3. 平文書出し秘文"), _
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "3. 平文書出し秘文" _
+        ), _
         "平文書き出し秘文"
 
+
     '==================================================
-    ' 15. オフライン秘文
+    ' 15.
+    ' オフライン秘文
     '==================================================
-    CopyCategory _
-        ws, wb, _
-        Array("4. オフライン秘文"), _
+    CreateFilteredSheet _
+        ws, _
+        wb, _
+        10, _
+        Array( _
+            "4. オフライン秘文" _
+        ), _
         "オフライン秘文"
 
-    '==================================================
-    ' 最終状態
-    '==================================================
-    ResetMainFilter ws
 
+    '==================================================
+    ' 全シート
+    ' 3行目にフィルター設定
+    '==================================================
+    Dim tmpWs As Worksheet
+
+    For Each tmpWs In wb.Worksheets
+        ResetFilter tmpWs
+    Next tmpWs
+
+
+    '==================================================
+    ' 完了
+    '==================================================
     ws.Activate
     ws.Range("A1").Select
 
@@ -236,9 +336,11 @@ Sub 書出し設定申請_作業ブック作成()
     Application.Calculation = oldCalc
     Application.ScreenUpdating = oldScreen
     Application.EnableEvents = oldEvents
+    Application.DisplayAlerts = oldAlerts
 
     MsgBox _
         "作業用ブックを作成しました。" & vbCrLf & _
+        "条件付き書式等は元シートから引き継いでいます。" & vbCrLf & _
         "新規ブックはまだ保存されていません。", _
         vbInformation
 
@@ -252,19 +354,23 @@ ErrorHandler:
     Application.Calculation = oldCalc
     Application.ScreenUpdating = oldScreen
     Application.EnableEvents = oldEvents
+    Application.DisplayAlerts = oldAlerts
 
     MsgBox _
         "処理中にエラーが発生しました。" & vbCrLf & vbCrLf & _
-        "エラー：" & Err.Description, _
+        "エラー番号：" & Err.Number & vbCrLf & _
+        "内容：" & Err.Description, _
         vbCritical
 
 End Sub
 
 
 '==========================================================
-' 最終行取得
+' 最終使用行
 '==========================================================
-Private Function LastUsedRow(ByVal ws As Worksheet) As Long
+Private Function LastUsedRow( _
+    ByVal ws As Worksheet _
+) As Long
 
     Dim c As Range
 
@@ -286,9 +392,11 @@ End Function
 
 
 '==========================================================
-' フィルター条件解除
+' フィルター解除
 '==========================================================
-Private Sub ClearFilter(ByVal ws As Worksheet)
+Private Sub ClearFilter( _
+    ByVal ws As Worksheet _
+)
 
     On Error Resume Next
 
@@ -302,60 +410,70 @@ End Sub
 
 
 '==========================================================
-' 指定条件の行を削除
+' フィルター再設定
 '==========================================================
-Private Sub DeleteFilteredRows( _
-    ByVal ws As Worksheet, _
-    ByVal fieldNo As Long, _
-    ByVal criteria As String, _
-    ByVal lastCol As Long)
+Private Sub ResetFilter( _
+    ByVal ws As Worksheet _
+)
 
     Dim lastRow As Long
-    Dim rngFilter As Range
-    Dim rngDelete As Range
+
+    ClearFilter ws
+
+    If ws.AutoFilterMode Then
+        ws.AutoFilterMode = False
+    End If
 
     lastRow = LastUsedRow(ws)
 
-    If lastRow < FIRST_DATA_ROW Then Exit Sub
+    If lastRow < FILTER_ROW Then
+        lastRow = FILTER_ROW
+    End If
 
-    ClearFilter ws
-
-    Set rngFilter = ws.Range( _
+    ws.Range( _
         ws.Cells(FILTER_ROW, 1), _
-        ws.Cells(lastRow, lastCol))
-
-    If Not ws.AutoFilterMode Then
-        rngFilter.AutoFilter
-    End If
-
-    rngFilter.AutoFilter _
-        Field:=fieldNo, _
-        Criteria1:=criteria
-
-    On Error Resume Next
-
-    Set rngDelete = ws.Range( _
-        ws.Cells(FIRST_DATA_ROW, 1), _
-        ws.Cells(lastRow, 1) _
-    ).SpecialCells(xlCellTypeVisible)
-
-    On Error GoTo 0
-
-    If Not rngDelete Is Nothing Then
-        rngDelete.EntireRow.Delete
-    End If
-
-    ClearFilter ws
+        ws.Cells(lastRow, 21) _
+    ).AutoFilter
 
 End Sub
 
 
 '==========================================================
-' S列空欄へ作業日入力
+' 項番のみの行か
+'
+' A列：値あり
+' B～Z：すべて空欄
+'==========================================================
+Private Function IsItemOnlyRow( _
+    ByVal ws As Worksheet, _
+    ByVal rowNo As Long _
+) As Boolean
+
+    If Len(Trim$(CStr(ws.Cells(rowNo, "A").Value))) = 0 Then
+
+        IsItemOnlyRow = False
+        Exit Function
+
+    End If
+
+    IsItemOnlyRow = _
+        (Application.CountA( _
+            ws.Range( _
+                "B" & rowNo & _
+                ":Z" & rowNo _
+            ) _
+        ) = 0)
+
+End Function
+
+
+'==========================================================
+' S列空欄へ作業日
 '==========================================================
 Private Sub FillWorkDate( _
     ByVal ws As Worksheet, _
-    ByVal workDate As Date)
+    ByVal workDate As Date _
+)
 
     Dim lastRow As Long
     Dim r As Long
@@ -366,11 +484,12 @@ Private Sub FillWorkDate( _
 
         If Len(ws.Cells(r, "S").Value) = 0 Then
 
-            ' 項番だけの行は対象外
             If Not IsItemOnlyRow(ws, r) Then
 
                 ws.Cells(r, "S").Value = workDate
-                ws.Cells(r, "S").NumberFormatLocal = "yyyy/mm/dd"
+
+                ws.Cells(r, "S").NumberFormatLocal = _
+                    "yyyy/mm/dd"
 
             End If
 
@@ -382,39 +501,11 @@ End Sub
 
 
 '==========================================================
-' 項番のみの行か判定
-'
-' A列：項番
-' S列：今回マクロで入力する可能性があるので判定から除外
+' 項番だけの行削除
 '==========================================================
-Private Function IsItemOnlyRow( _
-    ByVal ws As Worksheet, _
-    ByVal rowNo As Long) As Boolean
-
-    Dim cnt As Long
-
-    If Len(ws.Cells(rowNo, "A").Value) = 0 Then
-        IsItemOnlyRow = False
-        Exit Function
-    End If
-
-    cnt = 0
-
-    cnt = cnt + Application.CountA( _
-        ws.Range("B" & rowNo & ":R" & rowNo))
-
-    cnt = cnt + Application.CountA( _
-        ws.Range("T" & rowNo & ":Z" & rowNo))
-
-    IsItemOnlyRow = (cnt = 0)
-
-End Function
-
-
-'==========================================================
-' 項番のみの行を削除
-'==========================================================
-Private Sub DeleteItemOnlyRows(ByVal ws As Worksheet)
+Private Sub DeleteItemOnlyRows( _
+    ByVal ws As Worksheet _
+)
 
     Dim lastRow As Long
     Dim r As Long
@@ -433,226 +524,183 @@ End Sub
 
 
 '==========================================================
-' 仮想端末
-' N列 = 0 または -
-' コピー後、元シートから削除
+' 指定値に一致する / 一致しない行をまとめて削除
+'
+' deleteMatch = True
+'   → valuesに一致する行を削除
+'
+' deleteMatch = False
+'   → valuesに一致しない行を削除
 '==========================================================
-Private Sub ExtractVirtual( _
+Private Sub DeleteRowsMatching( _
     ByVal ws As Worksheet, _
-    ByVal wb As Workbook)
+    ByVal colNo As Long, _
+    ByVal values As Variant, _
+    ByVal deleteMatch As Boolean _
+)
 
-    Dim outWs As Worksheet
     Dim lastRow As Long
-    Dim rngFilter As Range
-    Dim rngVisible As Range
+    Dim arr As Variant
+
+    Dim i As Long
+    Dim rowNo As Long
+
+    Dim matched As Boolean
+    Dim doDelete As Boolean
+
+    Dim blockTop As Long
+    Dim blockBottom As Long
 
     lastRow = LastUsedRow(ws)
 
-    Set outWs = CreateOutputSheet( _
-        wb, ws, "仮想端末")
-
     If lastRow < FIRST_DATA_ROW Then Exit Sub
 
-    ClearFilter ws
+    arr = ws.Range( _
+        ws.Cells(FIRST_DATA_ROW, colNo), _
+        ws.Cells(lastRow, colNo) _
+    ).Value2
 
-    Set rngFilter = ws.Range( _
-        ws.Cells(FILTER_ROW, 1), _
-        ws.Cells(lastRow, 21))
 
-    If Not ws.AutoFilterMode Then
-        rngFilter.AutoFilter
+    For i = UBound(arr, 1) To 1 Step -1
+
+        rowNo = FIRST_DATA_ROW + i - 1
+
+        matched = ValueInList( _
+            arr(i, 1), _
+            values)
+
+        If deleteMatch Then
+            doDelete = matched
+        Else
+            doDelete = Not matched
+        End If
+
+
+        If doDelete Then
+
+            If blockBottom = 0 Then
+
+                blockTop = rowNo
+                blockBottom = rowNo
+
+            ElseIf rowNo = blockTop - 1 Then
+
+                blockTop = rowNo
+
+            Else
+
+                ws.Rows( _
+                    blockTop & ":" & blockBottom _
+                ).Delete
+
+                blockTop = rowNo
+                blockBottom = rowNo
+
+            End If
+
+        Else
+
+            If blockBottom <> 0 Then
+
+                ws.Rows( _
+                    blockTop & ":" & blockBottom _
+                ).Delete
+
+                blockTop = 0
+                blockBottom = 0
+
+            End If
+
+        End If
+
+    Next i
+
+
+    If blockBottom <> 0 Then
+
+        ws.Rows( _
+            blockTop & ":" & blockBottom _
+        ).Delete
+
     End If
-
-    rngFilter.AutoFilter _
-        Field:=14, _
-        Criteria1:=Array("0", "-"), _
-        Operator:=xlFilterValues
-
-    On Error Resume Next
-
-    Set rngVisible = ws.Range( _
-        ws.Cells(FIRST_DATA_ROW, 1), _
-        ws.Cells(lastRow, 21) _
-    ).SpecialCells(xlCellTypeVisible)
-
-    On Error GoTo 0
-
-    If Not rngVisible Is Nothing Then
-
-        CopyVisibleAreas rngVisible, outWs
-
-        ws.Range( _
-            ws.Cells(FIRST_DATA_ROW, 1), _
-            ws.Cells(lastRow, 1) _
-        ).SpecialCells(xlCellTypeVisible).EntireRow.Delete
-
-    End If
-
-    ClearFilter ws
-
-    SetFilterForOutput outWs
 
 End Sub
 
 
 '==========================================================
-' J列の内容ごとに別シートへコピー
+' 値が指定配列に含まれるか
 '==========================================================
-Private Sub CopyCategory( _
-    ByVal ws As Worksheet, _
-    ByVal wb As Workbook, _
-    ByVal criteria As Variant, _
-    ByVal sheetName As String)
+Private Function ValueInList( _
+    ByVal target As Variant, _
+    ByVal values As Variant _
+) As Boolean
 
-    Dim outWs As Worksheet
-    Dim lastRow As Long
-    Dim rngFilter As Range
-    Dim rngVisible As Range
+    Dim v As Variant
+    Dim targetText As String
 
-    lastRow = LastUsedRow(ws)
-
-    Set outWs = CreateOutputSheet( _
-        wb, ws, sheetName)
-
-    If lastRow < FIRST_DATA_ROW Then Exit Sub
-
-    ClearFilter ws
-
-    Set rngFilter = ws.Range( _
-        ws.Cells(FILTER_ROW, 1), _
-        ws.Cells(lastRow, 21))
-
-    If Not ws.AutoFilterMode Then
-        rngFilter.AutoFilter
+    If IsError(target) Then
+        ValueInList = False
+        Exit Function
     End If
 
-    rngFilter.AutoFilter _
-        Field:=10, _
-        Criteria1:=criteria, _
-        Operator:=xlFilterValues
+    targetText = Trim$(CStr(target))
 
-    On Error Resume Next
+    For Each v In values
 
-    Set rngVisible = ws.Range( _
-        ws.Cells(FIRST_DATA_ROW, 1), _
-        ws.Cells(lastRow, 21) _
-    ).SpecialCells(xlCellTypeVisible)
+        If StrComp( _
+            targetText, _
+            Trim$(CStr(v)), _
+            vbBinaryCompare _
+        ) = 0 Then
 
-    On Error GoTo 0
+            ValueInList = True
+            Exit Function
 
-    If Not rngVisible Is Nothing Then
-        CopyVisibleAreas rngVisible, outWs
-    End If
+        End If
 
-    ClearFilter ws
+    Next v
 
-    SetFilterForOutput outWs
-
-End Sub
-
-
-'==========================================================
-' 出力先シート作成
-'==========================================================
-Private Function CreateOutputSheet( _
-    ByVal wb As Workbook, _
-    ByVal srcWs As Worksheet, _
-    ByVal sheetName As String) As Worksheet
-
-    Dim ws As Worksheet
-    Dim c As Long
-
-    Set ws = wb.Worksheets.Add( _
-        After:=wb.Worksheets(wb.Worksheets.Count))
-
-    ws.Name = sheetName
-
-    ' 1～4行目をコピー
-    srcWs.Range("A1:U4").Copy _
-        Destination:=ws.Range("A1")
-
-    ' 列幅コピー
-    For c = 1 To 21
-        ws.Columns(c).ColumnWidth = _
-            srcWs.Columns(c).ColumnWidth
-    Next c
-
-    Set CreateOutputSheet = ws
+    ValueInList = False
 
 End Function
 
 
 '==========================================================
-' フィルター後の表示行をコピー
+' シート丸ごと複製 → 対象行だけ残す
+'
+' Range.Copyを使わないため
+' 条件付き書式等も保持
 '==========================================================
-Private Sub CopyVisibleAreas( _
-    ByVal rngVisible As Range, _
-    ByVal outWs As Worksheet)
+Private Sub CreateFilteredSheet( _
+    ByVal srcWs As Worksheet, _
+    ByVal wb As Workbook, _
+    ByVal colNo As Long, _
+    ByVal values As Variant, _
+    ByVal newName As String _
+)
 
-    Dim area As Range
-    Dim nextRow As Long
+    Dim outWs As Worksheet
 
-    nextRow = FIRST_DATA_ROW
+    ' シートそのものを複製
+    srcWs.Copy _
+        After:=wb.Worksheets( _
+            wb.Worksheets.Count)
 
-    For Each area In rngVisible.Areas
+    Set outWs = _
+        wb.Worksheets( _
+            wb.Worksheets.Count)
 
-        area.Copy _
-            Destination:=outWs.Cells(nextRow, 1)
+    outWs.Name = newName
 
-        nextRow = nextRow + area.Rows.Count
+    ClearFilter outWs
 
-    Next area
+    ' 指定値以外を削除
+    DeleteRowsMatching _
+        outWs, _
+        colNo, _
+        values, _
+        False
 
-End Sub
-
-
-'==========================================================
-' 出力シートへフィルター設定
-'==========================================================
-Private Sub SetFilterForOutput(ByVal ws As Worksheet)
-
-    Dim lastRow As Long
-
-    lastRow = LastUsedRow(ws)
-
-    If ws.AutoFilterMode Then
-        ws.AutoFilterMode = False
-    End If
-
-    If lastRow < FILTER_ROW Then
-        lastRow = FILTER_ROW
-    End If
-
-    ws.Range( _
-        ws.Cells(FILTER_ROW, 1), _
-        ws.Cells(lastRow, 21) _
-    ).AutoFilter
-
-End Sub
-
-
-'==========================================================
-' 元シートの最終フィルター状態
-'==========================================================
-Private Sub ResetMainFilter(ByVal ws As Worksheet)
-
-    Dim lastRow As Long
-
-    ClearFilter ws
-
-    If ws.AutoFilterMode Then
-        ws.AutoFilterMode = False
-    End If
-
-    lastRow = LastUsedRow(ws)
-
-    If lastRow < FILTER_ROW Then
-        lastRow = FILTER_ROW
-    End If
-
-    ws.Range( _
-        ws.Cells(FILTER_ROW, 1), _
-        ws.Cells(lastRow, 21) _
-    ).AutoFilter
+    ResetFilter outWs
 
 End Sub
