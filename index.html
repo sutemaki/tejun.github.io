@@ -1,934 +1,449 @@
-Option Explicit
-
-Private Const SRC_BOOK As String = "26年度申請台帳.xlsx"
-Private Const SRC_SHEET As String = "書出し設定申請"
-
-Private Const FILTER_ROW As Long = 3
-Private Const FIRST_DATA_ROW As Long = 5
-
-Private gCurrentStep As String
-
-
-'==========================================================
-' メイン
-'==========================================================
-Public Sub 書出し設定申請_作業ブック作成()
-
-    Dim srcWb As Workbook
-    Dim srcWs As Worksheet
-
-    Dim wb As Workbook
-    Dim ws As Worksheet
-    Dim tmpWs As Worksheet
-    Dim summaryWs As Worksheet
-
-    Dim lastRow As Long
-    Dim workDate As Date
-    Dim inputDate As Variant
-
-    Dim tempPath As String
-    Dim tempName As String
-
-    Dim i As Long
-
-    Dim oldCalc As XlCalculation
-    Dim oldScreen As Boolean
-    Dim oldEvents As Boolean
-    Dim oldAlerts As Boolean
-    Dim oldStatusBar As Variant
-
-    Dim stateSaved As Boolean
-
-
-    '==================================================
-    ' 作業日の入力
-    '==========================================================
-    inputDate = Application.InputBox( _
-        Prompt:="作業日を入力してください。", _
-        Title:="作業日の入力", _
-        Default:=Format(Date, "yyyy/mm/dd"), _
-        Type:=2)
-
-    If VarType(inputDate) = vbBoolean Then
-        If inputDate = False Then Exit Sub
-    End If
-
-    If Not IsDate(inputDate) Then
-
-        MsgBox _
-            "日付を正しく入力してください。", _
-            vbExclamation
-
-        Exit Sub
-
-    End If
-
-    workDate = DateValue(CDate(inputDate))
-
-
-    '==================================================
-    ' 元ブック確認
-    '==========================================================
-    On Error Resume Next
-    Set srcWb = Workbooks(SRC_BOOK)
-    On Error GoTo 0
-
-    If srcWb Is Nothing Then
-
-        MsgBox _
-            SRC_BOOK & " を開いてから実行してください。", _
-            vbExclamation
-
-        Exit Sub
-
-    End If
-
-
-    On Error Resume Next
-    Set srcWs = srcWb.Worksheets(SRC_SHEET)
-    On Error GoTo 0
-
-    If srcWs Is Nothing Then
-
-        MsgBox _
-            "シート「" & SRC_SHEET & "」が見つかりません。", _
-            vbExclamation
-
-        Exit Sub
-
-    End If
-
-
-    '==================================================
-    ' Excel状態保存
-    '==========================================================
-    oldCalc = Application.Calculation
-    oldScreen = Application.ScreenUpdating
-    oldEvents = Application.EnableEvents
-    oldAlerts = Application.DisplayAlerts
-    oldStatusBar = Application.StatusBar
-
-    stateSaved = True
-
-    Application.ScreenUpdating = False
-    Application.EnableEvents = False
-    Application.DisplayAlerts = False
-    Application.Calculation = xlCalculationManual
-
-    On Error GoTo ErrorHandler
-
-
-    '==================================================
-    ' 0.
-    ' 元ブック全体をTEMPへ複製
-    '==========================================================
-    SetStatus "元ブックから作業用コピーを作成"
-
-    tempName = _
-        "書出し設定申請_作業用_" & _
-        Format(Now, "yyyymmdd_hhnnss") & ".xlsx"
-
-    tempPath = Environ$("TEMP") & "\" & tempName
-
-    srcWb.SaveCopyAs tempPath
-
-
-    '==================================================
-    ' TEMPコピーを開く
-    '==========================================================
-    SetStatus "作業用ブックを開く"
-
-    Set wb = Workbooks.Open( _
-        Filename:=tempPath, _
-        UpdateLinks:=False, _
-        ReadOnly:=False)
-
-    Set ws = wb.Worksheets(SRC_SHEET)
-
-
-    '==================================================
-    ' 書出し設定申請以外のシート削除
-    '==========================================================
-    SetStatus "不要シートを削除"
-
-    For i = wb.Sheets.Count To 1 Step -1
-
-        If wb.Sheets(i).Name <> SRC_SHEET Then
-            wb.Sheets(i).Delete
-        End If
-
-    Next i
-
-    ClearFilter ws
-
-
-    '==================================================
-    ' 2. D列「否認」を削除
-    '==========================================================
-    SetStatus "D列「否認」の削除"
-
-    DeleteRowsMatching _
-        ws, _
-        4, _
-        Array("否認"), _
-        True
-
-
-    '==================================================
-    ' 3. S列空欄へ作業日
-    '==========================================================
-    SetStatus "S列へ作業日を入力"
-
-    FillWorkDate ws, workDate
-
-
-    '==================================================
-    ' 4. 項番のみの行削除
-    '==========================================================
-    SetStatus "項番のみの行を削除"
-
-    DeleteItemOnlyRows ws
-
-
-    '==================================================
-    ' 5.
-    ' N列：昇順
-    ' S列：新しい順
-    '==========================================================
-    SetStatus "N列・S列の並べ替え"
-
-    lastRow = LastUsedRow(ws)
-
-    If lastRow >= FIRST_DATA_ROW Then
-
-        ws.Range( _
-            ws.Cells(FIRST_DATA_ROW, 1), _
-            ws.Cells(lastRow, 26) _
-        ).Sort _
-            Key1:=ws.Cells(FIRST_DATA_ROW, 14), _
-            Order1:=xlAscending, _
-            Key2:=ws.Cells(FIRST_DATA_ROW, 19), _
-            Order2:=xlDescending, _
-            Header:=xlNo, _
-            MatchCase:=False, _
-            Orientation:=xlTopToBottom, _
-            DataOption1:=xlSortTextAsNumbers, _
-            DataOption2:=xlSortNormal
-
-    End If
-
-
-    '==================================================
-    ' 6. V～Z削除
-    '==========================================================
-    SetStatus "V～Z列の削除"
-
-    ws.Columns("V:Z").Delete
-
-
-    '==================================================
-    ' 8. 仮想端末
-    '==========================================================
-    SetStatus "仮想端末シート作成"
-
-    CreateFilteredSheet _
-        ws, _
-        wb, _
-        14, _
-        Array("0", "-"), _
-        "仮想端末"
-
-
-    '==================================================
-    ' 9. 元シートから0/-削除
-    '==========================================================
-    SetStatus "元シートからN列「0」「-」を削除"
-
-    DeleteRowsMatching _
-        ws, _
-        14, _
-        Array("0", "-"), _
-        True
-
-
-    '==================================================
-    ' 7・10相当
-    ' 同じIT資産No.は最新1件だけ残す
-    '==========================================================
-    SetStatus "IT資産No.の重複データを整理"
-
-    lastRow = LastUsedRow(ws)
-
-    If lastRow >= FIRST_DATA_ROW Then
-
-        ws.Range( _
-            ws.Cells(FIRST_DATA_ROW, 1), _
-            ws.Cells(lastRow, 21) _
-        ).RemoveDuplicates _
-            Columns:=14, _
-            Header:=xlNo
-
-    End If
-
-
-    '==================================================
-    ' 11. アンインストール
-    '==========================================================
-    SetStatus "アンインストールシート作成"
-
-    CreateFilteredSheet _
-        ws, _
-        wb, _
-        10, _
-        Array( _
-            "6. アンインストール/書出し制限再設定", _
-            "6. アンインストール" _
-        ), _
-        "アンインストール"
-
-
-    '==================================================
-    ' 12. 書き出し制限解除
-    '==========================================================
-    SetStatus "書き出し制限解除シート作成"
-
-    CreateFilteredSheet _
-        ws, _
-        wb, _
-        10, _
-        Array("5. 書出し制限解除"), _
-        "書き出し制限解除"
-
-
-    '==================================================
-    ' 13. 標準秘文
-    '==========================================================
-    SetStatus "標準秘文シート作成"
-
-    CreateFilteredSheet _
-        ws, _
-        wb, _
-        10, _
-        Array( _
-            "1. 標準秘文（日）", _
-            "2. 標準秘文（英）" _
-        ), _
-        "標準秘文"
-
-
-    '==================================================
-    ' 14. 平文書出し秘文
-    '==========================================================
-    SetStatus "平文書出し秘文シート作成"
-
-    CreateFilteredSheet _
-        ws, _
-        wb, _
-        10, _
-        Array("3. 平文書出し秘文"), _
-        "平文書出し秘文"
-
-
-    '==================================================
-    ' 15. オフライン秘文
-    '==========================================================
-    SetStatus "オフライン秘文シート作成"
-
-    CreateFilteredSheet _
-        ws, _
-        wb, _
-        10, _
-        Array("4. オフライン秘文"), _
-        "オフライン秘文"
-
-
-    '==================================================
-    ' 各データシートのフィルターを3行目へ
-    '==========================================================
-    SetStatus "フィルターを再設定"
-
-    For Each tmpWs In wb.Worksheets
-        ResetFilter tmpWs
-    Next tmpWs
-
-
-    '==================================================
-    ' サマリ作成
-    '==========================================================
-    SetStatus "サマリシートを作成"
-
-    Set summaryWs = CreateSummarySheet(wb)
-
-
-    '==================================================
-    ' 全シートA1選択
-    '==========================================================
-    SetStatus "全シートをA1へ戻す"
-
-    For Each tmpWs In wb.Worksheets
-
-        tmpWs.Activate
-        tmpWs.Range("A1").Select
-
-    Next tmpWs
-
-
-    ' 最後はサマリを表示
-    summaryWs.Activate
-    summaryWs.Range("A1").Select
-
-
-    '==================================================
-    ' 完了
-    '==========================================================
-    wb.Saved = False
-
-    Application.CutCopyMode = False
-
-    RestoreApplication _
-        oldCalc, _
-        oldScreen, _
-        oldEvents, _
-        oldAlerts, _
-        oldStatusBar
-
-    MsgBox _
-        "作業用ブックを作成しました。" & vbCrLf & vbCrLf & _
-        "サマリシートも作成済みです。" & vbCrLf & _
-        "作成されたブックはまだ保存されていません。", _
-        vbInformation
-
-    Exit Sub
-
-
-ErrorHandler:
-
-    Dim errNo As Long
-    Dim errText As String
-    Dim errStep As String
-
-    errNo = Err.Number
-    errText = Err.Description
-    errStep = gCurrentStep
-
-    Application.CutCopyMode = False
-
-    If stateSaved Then
-
-        RestoreApplication _
-            oldCalc, _
-            oldScreen, _
-            oldEvents, _
-            oldAlerts, _
-            oldStatusBar
-
-    End If
-
-    MsgBox _
-        "処理中にエラーが発生しました。" & vbCrLf & vbCrLf & _
-        "処理：" & errStep & vbCrLf & _
-        "エラー番号：" & errNo & vbCrLf & _
-        "内容：" & errText & vbCrLf & vbCrLf & _
-        "途中まで作成されたブックは保存せず閉じてください。", _
-        vbCritical
-
-End Sub
-
-
-'==========================================================
-' サマリシート作成
-'==========================================================
-Private Function CreateSummarySheet( _
-    ByVal wb As Workbook _
-) As Worksheet
-
-    Dim ws As Worksheet
-    Dim unWs As Worksheet
-
-    Set ws = wb.Worksheets.Add( _
-        Before:=wb.Worksheets(1))
-
-    ws.Name = "サマリ"
-
-    ' 見出し
-    ws.Range("A1").Value = "項目"
-    ws.Range("B1").Value = "件数"
-
-    ' 各シートのデータ行数
-    ws.Range("A2").Value = "標準秘文"
-    ws.Range("B2").Value = _
-        CountDataRows(wb.Worksheets("標準秘文"))
-
-    ws.Range("A3").Value = "平文書出し秘文"
-    ws.Range("B3").Value = _
-        CountDataRows(wb.Worksheets("平文書出し秘文"))
-
-    ws.Range("A4").Value = "オフライン秘文"
-    ws.Range("B4").Value = _
-        CountDataRows(wb.Worksheets("オフライン秘文"))
-
-
-    ' アンインストールの指定ステータス
-    Set unWs = wb.Worksheets("アンインストール")
-
-    ws.Range("A5").Value = _
-        "アンインストール：" & _
-        "ｱﾝｲﾝｽﾄｰﾙPW発行依頼連絡待ち"
-
-    ws.Range("B5").Value = _
-        CountStatusRows( _
-            unWs, _
-            "ｱﾝｲﾝｽﾄｰﾙPW発行依頼連絡待ち" _
+#Requires -Version 5.1
+
+param()
+
+# =========================================================
+# 固定範囲キャプチャ
+#  - Ctrl + Alt + Shift + S : 範囲を設定
+#  - Ctrl + Alt + A         : 固定範囲をキャプチャしてクリップボードへ
+# =========================================================
+
+# --- STAでなければ自分自身をSTAで再起動 ---
+if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
+    if (-not $PSCommandPath) {
+        Write-Host "このスクリプトは .ps1 として保存して実行してください。"
+        exit
+    }
+
+    $exe = (Get-Process -Id $PID).Path
+    $arg = "-NoProfile -ExecutionPolicy Bypass -STA -File `"$PSCommandPath`""
+    Start-Process -FilePath $exe -ArgumentList $arg | Out-Null
+    exit
+}
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# --- Hotkey用Win32ラッパ ---
+Add-Type @"
+using System;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
+
+public delegate void HotKeyPressedHandler(object sender, int id);
+
+public class HotkeyWindow : Form
+{
+    public event HotKeyPressedHandler HotKeyPressed;
+
+    [DllImport("user32.dll")]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    public HotkeyWindow()
+    {
+        this.FormBorderStyle = FormBorderStyle.FixedToolWindow;
+        this.ShowInTaskbar = false;
+        this.WindowState = FormWindowState.Minimized;
+        this.Opacity = 0;
+    }
+
+    protected override void SetVisibleCore(bool value)
+    {
+        base.SetVisibleCore(false);
+    }
+
+    public bool AddHotkey(int id, uint modifiers, uint vk)
+    {
+        return RegisterHotKey(this.Handle, id, modifiers, vk);
+    }
+
+    public void RemoveHotkey(int id)
+    {
+        UnregisterHotKey(this.Handle, id);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_HOTKEY = 0x0312;
+
+        if (m.Msg == WM_HOTKEY)
+        {
+            int id = m.WParam.ToInt32();
+            if (HotKeyPressed != null)
+            {
+                HotKeyPressed(this, id);
+            }
+        }
+
+        base.WndProc(ref m);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        try { UnregisterHotKey(this.Handle, 1); } catch {}
+        try { UnregisterHotKey(this.Handle, 2); } catch {}
+        base.OnFormClosing(e);
+    }
+}
+"@
+
+# ---------------------------------------------------------
+# 設定
+# ---------------------------------------------------------
+
+# ホットキー
+# Modifiers: ALT=1, CTRL=2, SHIFT=4, WIN=8
+$script:HotkeySetRect = @{
+    Id        = 1
+    Modifiers = 1 + 2 + 4      # Ctrl + Alt + Shift
+    Key       = [int][System.Windows.Forms.Keys]::S
+    Text      = "Ctrl + Alt + Shift + S"
+}
+$script:HotkeyCapture = @{
+    Id        = 2
+    Modifiers = 1 + 2          # Ctrl + Alt
+    Key       = [int][System.Windows.Forms.Keys]::A
+    Text      = "Ctrl + Alt + A"
+}
+
+# 保存先
+$script:AppDir    = Join-Path $env:APPDATA "FixedClipCapture"
+$script:ConfigPath = Join-Path $script:AppDir "config.json"
+
+# ここに現在の固定範囲を保持
+$script:CaptureRect = $null
+
+# 通知アイコン
+$script:NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+$script:NotifyIcon.Icon = [System.Drawing.SystemIcons]::Application
+$script:NotifyIcon.Visible = $true
+$script:NotifyIcon.Text = "固定範囲キャプチャ"
+
+# ---------------------------------------------------------
+# 関数
+# ---------------------------------------------------------
+
+function Show-Info {
+    param(
+        [string]$Title,
+        [string]$Text,
+        [int]$Timeout = 1500
+    )
+
+    try {
+        $script:NotifyIcon.BalloonTipTitle = $Title
+        $script:NotifyIcon.BalloonTipText  = $Text
+        $script:NotifyIcon.ShowBalloonTip($Timeout)
+    } catch {}
+}
+
+function Save-Config {
+    if (-not (Test-Path $script:AppDir)) {
+        New-Item -ItemType Directory -Path $script:AppDir -Force | Out-Null
+    }
+
+    if ($script:CaptureRect) {
+        $obj = [PSCustomObject]@{
+            X      = $script:CaptureRect.X
+            Y      = $script:CaptureRect.Y
+            Width  = $script:CaptureRect.Width
+            Height = $script:CaptureRect.Height
+        }
+        $obj | ConvertTo-Json | Set-Content -Path $script:ConfigPath -Encoding UTF8
+    }
+}
+
+function Load-Config {
+    if (Test-Path $script:ConfigPath) {
+        try {
+            $cfg = Get-Content $script:ConfigPath -Raw | ConvertFrom-Json
+            if ($cfg.Width -gt 0 -and $cfg.Height -gt 0) {
+                $script:CaptureRect = New-Object System.Drawing.Rectangle(
+                    [int]$cfg.X, [int]$cfg.Y, [int]$cfg.Width, [int]$cfg.Height
+                )
+            }
+        } catch {
+            $script:CaptureRect = $null
+        }
+    }
+}
+
+function Set-ClipboardImageRetry {
+    param(
+        [Parameter(Mandatory)]
+        [System.Drawing.Image]$Image
+    )
+
+    for ($i = 0; $i -lt 8; $i++) {
+        try {
+            [System.Windows.Forms.Clipboard]::SetImage($Image)
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 80
+        }
+    }
+    return $false
+}
+
+function Select-CaptureRegion {
+    $virtual = [System.Windows.Forms.SystemInformation]::VirtualScreen
+
+    $overlay = New-Object System.Windows.Forms.Form
+    $overlay.FormBorderStyle = 'None'
+    $overlay.StartPosition   = 'Manual'
+    $overlay.Location        = New-Object System.Drawing.Point($virtual.X, $virtual.Y)
+    $overlay.Size            = New-Object System.Drawing.Size($virtual.Width, $virtual.Height)
+    $overlay.TopMost         = $true
+    $overlay.BackColor       = [System.Drawing.Color]::Black
+    $overlay.Opacity         = 0.18
+    $overlay.Cursor          = [System.Windows.Forms.Cursors]::Cross
+    $overlay.KeyPreview      = $true
+    $overlay.Text            = "範囲選択"
+    $overlay.ShowInTaskbar   = $false
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.AutoSize  = $true
+    $label.BackColor = [System.Drawing.Color]::FromArgb(220, 255, 255, 225)
+    $label.ForeColor = [System.Drawing.Color]::Black
+    $label.Font      = New-Object System.Drawing.Font("Meiryo UI", 10)
+    $label.Text      = "ドラッグで範囲選択 / Escでキャンセル"
+    $label.Location  = New-Object System.Drawing.Point(20, 20)
+    $overlay.Controls.Add($label)
+
+    $state = [PSCustomObject]@{
+        Dragging = $false
+        StartPt  = [System.Drawing.Point]::Empty
+        EndPt    = [System.Drawing.Point]::Empty
+        Rect     = [System.Drawing.Rectangle]::Empty
+        Done     = $false
+        Canceled = $false
+    }
+
+    $overlay.Add_KeyDown({
+        if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
+            $state.Canceled = $true
+            $overlay.Close()
+        }
+    })
+
+    $overlay.Add_MouseDown({
+        if ($_.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
+            $state.Dragging = $true
+            $state.StartPt  = $_.Location
+            $state.EndPt    = $_.Location
+            $state.Rect     = [System.Drawing.Rectangle]::Empty
+            $overlay.Invalidate()
+        }
+    })
+
+    $overlay.Add_MouseMove({
+        if ($state.Dragging) {
+            $state.EndPt = $_.Location
+
+            $left   = [Math]::Min($state.StartPt.X, $state.EndPt.X)
+            $top    = [Math]::Min($state.StartPt.Y, $state.EndPt.Y)
+            $right  = [Math]::Max($state.StartPt.X, $state.EndPt.X)
+            $bottom = [Math]::Max($state.StartPt.Y, $state.EndPt.Y)
+
+            $state.Rect = [System.Drawing.Rectangle]::FromLTRB($left, $top, $right, $bottom)
+            $overlay.Invalidate()
+        }
+    })
+
+    $overlay.Add_MouseUp({
+        if ($_.Button -eq [System.Windows.Forms.MouseButtons]::Left -and $state.Dragging) {
+            $state.Dragging = $false
+
+            $left   = [Math]::Min($state.StartPt.X, $state.EndPt.X)
+            $top    = [Math]::Min($state.StartPt.Y, $state.EndPt.Y)
+            $right  = [Math]::Max($state.StartPt.X, $state.EndPt.X)
+            $bottom = [Math]::Max($state.StartPt.Y, $state.EndPt.Y)
+
+            $state.Rect = [System.Drawing.Rectangle]::FromLTRB($left, $top, $right, $bottom)
+
+            if ($state.Rect.Width -ge 2 -and $state.Rect.Height -ge 2) {
+                # オーバーレイ上の座標 → 画面全体座標へ変換
+                $screenRect = New-Object System.Drawing.Rectangle(
+                    ($virtual.X + $state.Rect.X),
+                    ($virtual.Y + $state.Rect.Y),
+                    $state.Rect.Width,
+                    $state.Rect.Height
+                )
+
+                $script:CaptureRect = $screenRect
+                Save-Config
+
+                Show-Info "範囲を保存" ("X={0}, Y={1}, W={2}, H={3}" -f `
+                    $script:CaptureRect.X, $script:CaptureRect.Y,
+                    $script:CaptureRect.Width, $script:CaptureRect.Height)
+            }
+
+            $state.Done = $true
+            $overlay.Close()
+        }
+    })
+
+    $overlay.Add_Paint({
+        if ($state.Rect.Width -gt 0 -and $state.Rect.Height -gt 0) {
+            $g = $_.Graphics
+
+            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 2)
+            $g.DrawRectangle($pen, $state.Rect)
+
+            $text = "{0} x {1}" -f $state.Rect.Width, $state.Rect.Height
+            $font = New-Object System.Drawing.Font("Meiryo UI", 10, [System.Drawing.FontStyle]::Bold)
+            $brushBg = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(220, 255, 255, 225))
+            $brushFg = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
+
+            $size = $g.MeasureString($text, $font)
+            $tx = $state.Rect.X
+            $ty = [Math]::Max(0, $state.Rect.Y - [int]$size.Height - 6)
+
+            $g.FillRectangle($brushBg, $tx, $ty, [int]$size.Width + 8, [int]$size.Height + 4)
+            $g.DrawString($text, $font, $brushFg, $tx + 4, $ty + 2)
+
+            $pen.Dispose()
+            $font.Dispose()
+            $brushBg.Dispose()
+            $brushFg.Dispose()
+        }
+    })
+
+    $overlay.Add_Shown({
+        $overlay.Activate()
+    })
+
+    [void]$overlay.ShowDialog()
+    $overlay.Dispose()
+}
+
+function Invoke-FixedCapture {
+    if (-not $script:CaptureRect -or $script:CaptureRect.Width -le 0 -or $script:CaptureRect.Height -le 0) {
+        Show-Info "未設定" "先に $($script:HotkeySetRect.Text) で範囲を設定してください。" 2000
+        return
+    }
+
+    $rect = $script:CaptureRect
+
+    try {
+        $bmp = New-Object System.Drawing.Bitmap($rect.Width, $rect.Height)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+
+        $g.CopyFromScreen(
+            (New-Object System.Drawing.Point($rect.X, $rect.Y)),
+            [System.Drawing.Point]::Empty,
+            (New-Object System.Drawing.Size($rect.Width, $rect.Height))
         )
 
-
-    ' 見やすくする
-    ws.Range("A1:B1").Font.Bold = True
-
-    ws.Columns("A:B").AutoFit
-
-    Set CreateSummarySheet = ws
-
-End Function
-
-
-'==========================================================
-' データが入っている行数
-'==========================================================
-Private Function CountDataRows( _
-    ByVal ws As Worksheet _
-) As Long
-
-    Dim lastRow As Long
-    Dim r As Long
-    Dim cnt As Long
-
-    lastRow = LastUsedRow(ws)
-
-    If lastRow < FIRST_DATA_ROW Then
-        CountDataRows = 0
-        Exit Function
-    End If
-
-    For r = FIRST_DATA_ROW To lastRow
-
-        If Application.CountA( _
-            ws.Range( _
-                ws.Cells(r, 1), _
-                ws.Cells(r, 21) _
-            ) _
-        ) > 0 Then
-
-            cnt = cnt + 1
-
-        End If
-
-    Next r
-
-    CountDataRows = cnt
-
-End Function
-
-
-'==========================================================
-' D列の特定ステータス件数
-'==========================================================
-Private Function CountStatusRows( _
-    ByVal ws As Worksheet, _
-    ByVal statusText As String _
-) As Long
-
-    Dim lastRow As Long
-    Dim r As Long
-    Dim cnt As Long
-
-    lastRow = LastUsedRow(ws)
-
-    If lastRow < FIRST_DATA_ROW Then
-        CountStatusRows = 0
-        Exit Function
-    End If
-
-    For r = FIRST_DATA_ROW To lastRow
-
-        If StrComp( _
-            Trim$(CStr(ws.Cells(r, 4).Value2)), _
-            statusText, _
-            vbBinaryCompare _
-        ) = 0 Then
-
-            cnt = cnt + 1
-
-        End If
-
-    Next r
-
-    CountStatusRows = cnt
-
-End Function
-
-
-'==========================================================
-' 処理状況
-'==========================================================
-Private Sub SetStatus(ByVal text As String)
-
-    gCurrentStep = text
-    Application.StatusBar = "処理中：" & text
-
-End Sub
-
-
-'==========================================================
-' Excel状態復元
-'==========================================================
-Private Sub RestoreApplication( _
-    ByVal oldCalc As XlCalculation, _
-    ByVal oldScreen As Boolean, _
-    ByVal oldEvents As Boolean, _
-    ByVal oldAlerts As Boolean, _
-    ByVal oldStatusBar As Variant)
-
-    Application.Calculation = oldCalc
-    Application.ScreenUpdating = oldScreen
-    Application.EnableEvents = oldEvents
-    Application.DisplayAlerts = oldAlerts
-    Application.StatusBar = oldStatusBar
-
-End Sub
-
-
-'==========================================================
-' 最終使用行
-'==========================================================
-Private Function LastUsedRow( _
-    ByVal ws As Worksheet _
-) As Long
-
-    Dim c As Range
-
-    Set c = ws.Cells.Find( _
-        What:="*", _
-        After:=ws.Cells(1, 1), _
-        LookIn:=xlFormulas, _
-        LookAt:=xlPart, _
-        SearchOrder:=xlByRows, _
-        SearchDirection:=xlPrevious)
-
-    If c Is Nothing Then
-        LastUsedRow = FIRST_DATA_ROW - 1
-    Else
-        LastUsedRow = c.Row
-    End If
-
-End Function
-
-
-'==========================================================
-' フィルター解除
-'==========================================================
-Private Sub ClearFilter(ByVal ws As Worksheet)
-
-    On Error Resume Next
-
-    If ws.FilterMode Then
-        ws.ShowAllData
-    End If
-
-    On Error GoTo 0
-
-End Sub
-
-
-'==========================================================
-' 3行目からフィルター
-'==========================================================
-Private Sub ResetFilter(ByVal ws As Worksheet)
-
-    Dim lastRow As Long
-
-    ClearFilter ws
-
-    If ws.AutoFilterMode Then
-        ws.AutoFilterMode = False
-    End If
-
-    lastRow = LastUsedRow(ws)
-
-    If lastRow < FILTER_ROW Then
-        lastRow = FILTER_ROW
-    End If
-
-    ws.Range( _
-        ws.Cells(FILTER_ROW, 1), _
-        ws.Cells(lastRow, 21) _
-    ).AutoFilter
-
-End Sub
-
-
-'==========================================================
-' A列だけ値あり、B～Z空欄か
-'==========================================================
-Private Function IsItemOnlyRow( _
-    ByVal ws As Worksheet, _
-    ByVal rowNo As Long _
-) As Boolean
-
-    If Len(Trim$(CStr(ws.Cells(rowNo, 1).Value2))) = 0 Then
-
-        IsItemOnlyRow = False
-        Exit Function
-
-    End If
-
-    IsItemOnlyRow = _
-        (Application.CountA( _
-            ws.Range( _
-                ws.Cells(rowNo, 2), _
-                ws.Cells(rowNo, 26) _
-            ) _
-        ) = 0)
-
-End Function
-
-
-'==========================================================
-' S列空欄へ作業日
-'==========================================================
-Private Sub FillWorkDate( _
-    ByVal ws As Worksheet, _
-    ByVal workDate As Date _
+        # 黒色1px境界線
+        $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 1)
+        $g.DrawRectangle($pen, 0, 0, $bmp.Width - 1, $bmp.Height - 1)
+
+        $g.Dispose()
+        $pen.Dispose()
+
+        # 将来ここに「アスペクト比維持のまま指定サイズへ拡大」処理を追加可能
+        # いったん今回は未実装
+
+        if (Set-ClipboardImageRetry -Image $bmp) {
+            Show-Info "キャプチャ完了" ("{0} x {1} をクリップボードへコピーしました。" -f $rect.Width, $rect.Height) 1200
+            [System.Media.SystemSounds]::Asterisk.Play()
+        } else {
+            Show-Info "失敗" "クリップボードへの格納に失敗しました。" 2000
+        }
+
+        $bmp.Dispose()
+    }
+    catch {
+        Show-Info "エラー" $_.Exception.Message 2500
+    }
+}
+
+# ---------------------------------------------------------
+# 起動準備
+# ---------------------------------------------------------
+
+Load-Config
+
+# トレイメニュー
+$menu = New-Object System.Windows.Forms.ContextMenuStrip
+
+$itemSet = $menu.Items.Add("範囲を再設定")
+$itemSet.Add_Click({
+    Select-CaptureRegion
+}) | Out-Null
+
+$itemCap = $menu.Items.Add("今すぐキャプチャ")
+$itemCap.Add_Click({
+    Invoke-FixedCapture
+}) | Out-Null
+
+[void]$menu.Items.Add("-")
+
+$itemExit = $menu.Items.Add("終了")
+$itemExit.Add_Click({
+    try { $script:NotifyIcon.Visible = $false } catch {}
+    [System.Windows.Forms.Application]::Exit()
+}) | Out-Null
+
+$script:NotifyIcon.ContextMenuStrip = $menu
+
+# Hotkey受信用フォーム
+$hotkeyForm = New-Object HotkeyWindow
+$null = $hotkeyForm.Handle
+
+$ok1 = $hotkeyForm.AddHotkey(
+    $script:HotkeySetRect.Id,
+    [uint32]$script:HotkeySetRect.Modifiers,
+    [uint32]$script:HotkeySetRect.Key
 )
 
-    Dim lastRow As Long
-    Dim r As Long
-
-    lastRow = LastUsedRow(ws)
-
-    If lastRow < FIRST_DATA_ROW Then Exit Sub
-
-    For r = FIRST_DATA_ROW To lastRow
-
-        If Len(CStr(ws.Cells(r, 19).Value2)) = 0 Then
-
-            If Not IsItemOnlyRow(ws, r) Then
-                ws.Cells(r, 19).Value = workDate
-            End If
-
-        End If
-
-    Next r
-
-End Sub
-
-
-'==========================================================
-' 項番のみの行削除
-'==========================================================
-Private Sub DeleteItemOnlyRows(ByVal ws As Worksheet)
-
-    Dim lastRow As Long
-    Dim r As Long
-
-    lastRow = LastUsedRow(ws)
-
-    For r = lastRow To FIRST_DATA_ROW Step -1
-
-        If IsItemOnlyRow(ws, r) Then
-            ws.Rows(r).Delete
-        End If
-
-    Next r
-
-End Sub
-
-
-'==========================================================
-' 指定値に一致する / しない行を削除
-'==========================================================
-Private Sub DeleteRowsMatching( _
-    ByVal ws As Worksheet, _
-    ByVal colNo As Long, _
-    ByVal values As Variant, _
-    ByVal deleteMatch As Boolean _
+$ok2 = $hotkeyForm.AddHotkey(
+    $script:HotkeyCapture.Id,
+    [uint32]$script:HotkeyCapture.Modifiers,
+    [uint32]$script:HotkeyCapture.Key
 )
 
-    Dim lastRow As Long
-    Dim arr As Variant
+if (-not $ok1 -or -not $ok2) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "ホットキー登録に失敗しました。`n他のアプリと競合している可能性があります。",
+        "固定範囲キャプチャ",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    ) | Out-Null
 
-    Dim i As Long
-    Dim rowNo As Long
+    try { $script:NotifyIcon.Visible = $false } catch {}
+    exit
+}
 
-    Dim matched As Boolean
-    Dim doDelete As Boolean
+$hotkeyForm.add_HotKeyPressed({
+    param($sender, $id)
 
-    Dim blockTop As Long
-    Dim blockBottom As Long
+    switch ($id) {
+        1 { Select-CaptureRegion }
+        2 { Invoke-FixedCapture }
+    }
+})
 
-    lastRow = LastUsedRow(ws)
+if ($script:CaptureRect) {
+    Show-Info "固定範囲キャプチャ 起動" `
+        ("範囲読込済み: X={0}, Y={1}, W={2}, H={3}`n設定: {4}`n撮影: {5}" -f `
+            $script:CaptureRect.X, $script:CaptureRect.Y,
+            $script:CaptureRect.Width, $script:CaptureRect.Height,
+            $script:HotkeySetRect.Text, $script:HotkeyCapture.Text
+        ) 2500
+}
+else {
+    Show-Info "固定範囲キャプチャ 起動" `
+        ("まず {0} で範囲を設定してください。`n撮影は {1}" -f `
+            $script:HotkeySetRect.Text, $script:HotkeyCapture.Text
+        ) 2500
+}
 
-    If lastRow < FIRST_DATA_ROW Then Exit Sub
+[System.Windows.Forms.Application]::Run($hotkeyForm)
 
-    arr = ws.Range( _
-        ws.Cells(FIRST_DATA_ROW, colNo), _
-        ws.Cells(lastRow, colNo) _
-    ).Value2
-
-
-    If lastRow = FIRST_DATA_ROW Then
-
-        matched = ValueInList(arr, values)
-
-        If deleteMatch Then
-            doDelete = matched
-        Else
-            doDelete = Not matched
-        End If
-
-        If doDelete Then
-            ws.Rows(FIRST_DATA_ROW).Delete
-        End If
-
-        Exit Sub
-
-    End If
-
-
-    For i = UBound(arr, 1) To 1 Step -1
-
-        rowNo = FIRST_DATA_ROW + i - 1
-
-        matched = ValueInList( _
-            arr(i, 1), _
-            values)
-
-        If deleteMatch Then
-            doDelete = matched
-        Else
-            doDelete = Not matched
-        End If
-
-
-        If doDelete Then
-
-            If blockBottom = 0 Then
-
-                blockTop = rowNo
-                blockBottom = rowNo
-
-            ElseIf rowNo = blockTop - 1 Then
-
-                blockTop = rowNo
-
-            Else
-
-                ws.Rows( _
-                    blockTop & ":" & blockBottom _
-                ).Delete
-
-                blockTop = rowNo
-                blockBottom = rowNo
-
-            End If
-
-        Else
-
-            If blockBottom <> 0 Then
-
-                ws.Rows( _
-                    blockTop & ":" & blockBottom _
-                ).Delete
-
-                blockTop = 0
-                blockBottom = 0
-
-            End If
-
-        End If
-
-    Next i
-
-
-    If blockBottom <> 0 Then
-
-        ws.Rows( _
-            blockTop & ":" & blockBottom _
-        ).Delete
-
-    End If
-
-End Sub
-
-
-'==========================================================
-' 指定値リスト内に存在するか
-'==========================================================
-Private Function ValueInList( _
-    ByVal target As Variant, _
-    ByVal values As Variant _
-) As Boolean
-
-    Dim v As Variant
-    Dim targetText As String
-
-    If IsError(target) Then Exit Function
-
-    targetText = Trim$(CStr(target))
-
-    For Each v In values
-
-        If StrComp( _
-            targetText, _
-            Trim$(CStr(v)), _
-            vbBinaryCompare _
-        ) = 0 Then
-
-            ValueInList = True
-            Exit Function
-
-        End If
-
-    Next v
-
-End Function
-
-
-'==========================================================
-' シートを丸ごと複製 → 対象行のみ残す
-'==========================================================
-Private Sub CreateFilteredSheet( _
-    ByVal srcWs As Worksheet, _
-    ByVal wb As Workbook, _
-    ByVal colNo As Long, _
-    ByVal values As Variant, _
-    ByVal newName As String _
-)
-
-    Dim outWs As Worksheet
-
-    gCurrentStep = newName & "：シートを複製"
-    Application.StatusBar = "処理中：" & gCurrentStep
-
-    srcWs.Copy _
-        After:=wb.Worksheets(wb.Worksheets.Count)
-
-    Set outWs = _
-        wb.Worksheets(wb.Worksheets.Count)
-
-    outWs.Name = newName
-
-    gCurrentStep = newName & "：対象外データを削除"
-    Application.StatusBar = "処理中：" & gCurrentStep
-
-    ClearFilter outWs
-
-    DeleteRowsMatching _
-        outWs, _
-        colNo, _
-        values, _
-        False
-
-    ResetFilter outWs
-
-End Sub
+# 念のため終了処理
+try { $script:NotifyIcon.Visible = $false } catch {}
