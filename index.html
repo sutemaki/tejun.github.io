@@ -1,89 +1,128 @@
-
-# --- Hotkey用Win32ラッパ ---
-
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-$HotkeySource = @"
-using System;
-using System.Windows.Forms;
-using System.Runtime.InteropServices;
-
-public delegate void HotKeyPressedHandler(object sender, int id);
-
-public class HotkeyWindow : Form
-{
-    public event HotKeyPressedHandler HotKeyPressed;
-
-    [DllImport("user32.dll")]
-    private static extern bool RegisterHotKey(
-        IntPtr hWnd,
-        int id,
-        uint fsModifiers,
-        uint vk
-    );
-
-    [DllImport("user32.dll")]
-    private static extern bool UnregisterHotKey(
-        IntPtr hWnd,
-        int id
-    );
-
-    public HotkeyWindow()
-    {
-        this.FormBorderStyle = FormBorderStyle.FixedToolWindow;
-        this.ShowInTaskbar = false;
-        this.WindowState = FormWindowState.Minimized;
-        this.Opacity = 0;
+function Invoke-FixedCapture {
+    if (-not $script:CaptureRect -or $script:CaptureRect.Width -le 0 -or $script:CaptureRect.Height -le 0) {
+        Show-Info "未設定" "先に $($script:HotkeySetRect.Text) で範囲を設定してください。" 2000
+        return
     }
 
-    protected override void SetVisibleCore(bool value)
-    {
-        base.SetVisibleCore(false);
-    }
+    $rect = $script:CaptureRect
 
-    public bool AddHotkey(int id, uint modifiers, uint vk)
-    {
-        return RegisterHotKey(this.Handle, id, modifiers, vk);
-    }
+    try {
+        # -------------------------------------------------
+        # 1. 固定範囲をキャプチャ
+        # -------------------------------------------------
+        $bmp = New-Object System.Drawing.Bitmap($rect.Width, $rect.Height)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
 
-    public void RemoveHotkey(int id)
-    {
-        UnregisterHotKey(this.Handle, id);
-    }
+        $g.CopyFromScreen(
+            (New-Object System.Drawing.Point($rect.X, $rect.Y)),
+            [System.Drawing.Point]::Empty,
+            (New-Object System.Drawing.Size($rect.Width, $rect.Height))
+        )
 
-    protected override void WndProc(ref Message m)
-    {
-        const int WM_HOTKEY = 0x0312;
+        # -------------------------------------------------
+        # 2. 黒色 2px の境界線を追加
+        # -------------------------------------------------
+        $borderSize = 2
+        $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
 
-        if (m.Msg == WM_HOTKEY)
-        {
-            int id = m.WParam.ToInt32();
+        # 上
+        $g.FillRectangle(
+            $brush,
+            0,
+            0,
+            $bmp.Width,
+            $borderSize
+        )
 
-            if (HotKeyPressed != null)
-            {
-                HotKeyPressed(this, id);
-            }
+        # 下
+        $g.FillRectangle(
+            $brush,
+            0,
+            $bmp.Height - $borderSize,
+            $bmp.Width,
+            $borderSize
+        )
+
+        # 左
+        $g.FillRectangle(
+            $brush,
+            0,
+            0,
+            $borderSize,
+            $bmp.Height
+        )
+
+        # 右
+        $g.FillRectangle(
+            $brush,
+            $bmp.Width - $borderSize,
+            0,
+            $borderSize,
+            $bmp.Height
+        )
+
+        $brush.Dispose()
+        $g.Dispose()
+
+        # -------------------------------------------------
+        # 3. 横幅780pxまでアスペクト比を維持して拡大
+        # -------------------------------------------------
+        $targetWidth = 780
+
+        if ($bmp.Width -lt $targetWidth) {
+
+            $scale = $targetWidth / [double]$bmp.Width
+            $targetHeight = [int][Math]::Round($bmp.Height * $scale)
+
+            $resized = New-Object System.Drawing.Bitmap(
+                $targetWidth,
+                $targetHeight
+            )
+
+            $rg = [System.Drawing.Graphics]::FromImage($resized)
+
+            # スクリーンショット向けの高品質拡大
+            $rg.InterpolationMode = `
+                [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+
+            $rg.PixelOffsetMode = `
+                [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+            $rg.CompositingQuality = `
+                [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+
+            $rg.DrawImage(
+                $bmp,
+                0,
+                0,
+                $targetWidth,
+                $targetHeight
+            )
+
+            $rg.Dispose()
+            $bmp.Dispose()
+
+            $bmp = $resized
         }
 
-        base.WndProc(ref m);
+        # -------------------------------------------------
+        # 4. クリップボードへ
+        # -------------------------------------------------
+        if (Set-ClipboardImageRetry -Image $bmp) {
+
+            Show-Info "キャプチャ完了" `
+                ("{0} x {1} をクリップボードへコピーしました。" -f `
+                $bmp.Width, $bmp.Height) 1200
+
+            [System.Media.SystemSounds]::Asterisk.Play()
+        }
+        else {
+            Show-Info "失敗" "クリップボードへの格納に失敗しました。" 2000
+        }
+
+        $bmp.Dispose()
     }
-
-    protected override void OnFormClosing(FormClosingEventArgs e)
-    {
-        try { UnregisterHotKey(this.Handle, 1); } catch {}
-        try { UnregisterHotKey(this.Handle, 2); } catch {}
-
-        base.OnFormClosing(e);
+    catch {
+        Show-Info "エラー" $_.Exception.Message 2500
     }
 }
-"@
-
-$Refs = @(
-    [System.Windows.Forms.Form].Assembly.Location
-    [System.Drawing.Bitmap].Assembly.Location
-)
-
-Add-Type `
-    -TypeDefinition $HotkeySource `
-    -ReferencedAssemblies $Refs
