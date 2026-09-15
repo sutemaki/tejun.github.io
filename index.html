@@ -1,29 +1,891 @@
-function Invoke-FixedCapture {
-    if (-not $script:CaptureRect -or $script:CaptureRect.Width -le 0 -or $script:CaptureRect.Height -le 0) {
-        Show-Info "未設定" "先に $($script:HotkeySetRect.Text) で範囲を設定してください。" 2000
+#Requires -Version 5.1
+
+# ============================================================
+# FixedClipCapture v0.2
+#
+# Ctrl + Alt + Shift + S
+#   固定キャプチャ範囲を設定
+#
+# Ctrl + Alt + A
+#   固定範囲をキャプチャ
+#   → 黒2px境界
+#   → 横幅が780px未満ならアスペクト比維持で780pxへ拡大
+#   → クリップボードへ格納
+#
+# ※ 780px以上の場合は縮小しない
+# ============================================================
+
+
+# ============================================================
+# STAでなければSTAで再起動
+# ============================================================
+
+if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
+
+    if (-not $PSCommandPath) {
+        Write-Host "このスクリプトは .ps1 として保存して実行してください。"
+        exit
+    }
+
+    $exe = (Get-Process -Id $PID).Path
+
+    $args = @(
+        "-NoProfile"
+        "-ExecutionPolicy", "Bypass"
+        "-STA"
+        "-File", "`"$PSCommandPath`""
+    )
+
+    Start-Process `
+        -FilePath $exe `
+        -ArgumentList ($args -join " ")
+
+    exit
+}
+
+
+# ============================================================
+# DPIスケーリング対策
+# WinFormsを読み込む前に実行
+# ============================================================
+
+if (-not ("DpiHelper" -as [type])) {
+
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class DpiHelper
+{
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDpiAwarenessContext(
+        IntPtr dpiContext
+    );
+}
+"@
+}
+
+# DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+try {
+    [void][DpiHelper]::SetProcessDpiAwarenessContext([IntPtr](-4))
+}
+catch {
+}
+
+
+# ============================================================
+# WinForms / Drawing
+# ============================================================
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+
+# ============================================================
+# グローバルホットキー用
+# ============================================================
+
+if (-not ("HotkeyWindow" -as [type])) {
+
+    $HotkeySource = @"
+using System;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
+
+public delegate void HotKeyPressedHandler(object sender, int id);
+
+public class HotkeyWindow : Form
+{
+    public event HotKeyPressedHandler HotKeyPressed;
+
+    [DllImport("user32.dll")]
+    private static extern bool RegisterHotKey(
+        IntPtr hWnd,
+        int id,
+        uint fsModifiers,
+        uint vk
+    );
+
+    [DllImport("user32.dll")]
+    private static extern bool UnregisterHotKey(
+        IntPtr hWnd,
+        int id
+    );
+
+    public HotkeyWindow()
+    {
+        this.FormBorderStyle = FormBorderStyle.FixedToolWindow;
+        this.ShowInTaskbar = false;
+        this.WindowState = FormWindowState.Minimized;
+        this.Opacity = 0;
+    }
+
+    protected override void SetVisibleCore(bool value)
+    {
+        base.SetVisibleCore(false);
+    }
+
+    public bool AddHotkey(
+        int id,
+        uint modifiers,
+        uint vk
+    )
+    {
+        return RegisterHotKey(
+            this.Handle,
+            id,
+            modifiers,
+            vk
+        );
+    }
+
+    public void RemoveHotkey(int id)
+    {
+        UnregisterHotKey(
+            this.Handle,
+            id
+        );
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_HOTKEY = 0x0312;
+
+        if (m.Msg == WM_HOTKEY)
+        {
+            int id = m.WParam.ToInt32();
+
+            if (HotKeyPressed != null)
+            {
+                HotKeyPressed(this, id);
+            }
+        }
+
+        base.WndProc(ref m);
+    }
+
+    protected override void OnFormClosing(
+        FormClosingEventArgs e
+    )
+    {
+        try {
+            UnregisterHotKey(
+                this.Handle,
+                1
+            );
+        }
+        catch {}
+
+        try {
+            UnregisterHotKey(
+                this.Handle,
+                2
+            );
+        }
+        catch {}
+
+        base.OnFormClosing(e);
+    }
+}
+"@
+
+    Add-Type `
+        -TypeDefinition $HotkeySource `
+        -ReferencedAssemblies @(
+            "System.dll",
+            "System.Windows.Forms.dll"
+        )
+}
+
+
+# ============================================================
+# 設定
+# ============================================================
+
+# Ctrl + Alt + Shift + S
+# 範囲設定
+$script:HotkeySetRect = @{
+    Id        = 1
+    Modifiers = 1 + 2 + 4
+    Key       = [int][System.Windows.Forms.Keys]::S
+    Text      = "Ctrl + Alt + Shift + S"
+}
+
+
+# Ctrl + Alt + A
+# キャプチャ
+$script:HotkeyCapture = @{
+    Id        = 2
+    Modifiers = 1 + 2
+    Key       = [int][System.Windows.Forms.Keys]::A
+    Text      = "Ctrl + Alt + A"
+}
+
+
+# 最終的に拡大する横幅
+$script:TargetWidth = 780
+
+
+# 黒枠
+$script:BorderSize = 2
+
+
+# 設定保存先
+$script:AppDir = Join-Path `
+    $env:APPDATA `
+    "FixedClipCapture"
+
+$script:ConfigPath = Join-Path `
+    $script:AppDir `
+    "config.json"
+
+
+# キャプチャ範囲
+$script:CaptureRect = $null
+
+
+# ============================================================
+# 通知アイコン
+# ============================================================
+
+$script:NotifyIcon = `
+    New-Object System.Windows.Forms.NotifyIcon
+
+$script:NotifyIcon.Icon = `
+    [System.Drawing.SystemIcons]::Application
+
+$script:NotifyIcon.Visible = $true
+
+$script:NotifyIcon.Text = `
+    "固定範囲キャプチャ"
+
+
+# ============================================================
+# 通知
+# ============================================================
+
+function Show-Info {
+
+    param(
+        [string]$Title,
+        [string]$Text,
+        [int]$Timeout = 1500
+    )
+
+    try {
+
+        $script:NotifyIcon.BalloonTipTitle = `
+            $Title
+
+        $script:NotifyIcon.BalloonTipText = `
+            $Text
+
+        $script:NotifyIcon.ShowBalloonTip(
+            $Timeout
+        )
+    }
+    catch {
+    }
+}
+
+
+# ============================================================
+# 設定保存
+# ============================================================
+
+function Save-Config {
+
+    if (-not (Test-Path $script:AppDir)) {
+
+        New-Item `
+            -ItemType Directory `
+            -Path $script:AppDir `
+            -Force |
+        Out-Null
+    }
+
+
+    if ($script:CaptureRect) {
+
+        $obj = [PSCustomObject]@{
+
+            X = $script:CaptureRect.X
+
+            Y = $script:CaptureRect.Y
+
+            Width = $script:CaptureRect.Width
+
+            Height = $script:CaptureRect.Height
+        }
+
+
+        $obj |
+        ConvertTo-Json |
+        Set-Content `
+            -Path $script:ConfigPath `
+            -Encoding UTF8
+    }
+}
+
+
+# ============================================================
+# 設定読込
+# ============================================================
+
+function Load-Config {
+
+    if (-not (Test-Path $script:ConfigPath)) {
         return
     }
 
-    $rect = $script:CaptureRect
 
     try {
-        # -------------------------------------------------
-        # 1. 固定範囲をキャプチャ
-        # -------------------------------------------------
-        $bmp = New-Object System.Drawing.Bitmap($rect.Width, $rect.Height)
-        $g = [System.Drawing.Graphics]::FromImage($bmp)
 
-        $g.CopyFromScreen(
-            (New-Object System.Drawing.Point($rect.X, $rect.Y)),
-            [System.Drawing.Point]::Empty,
-            (New-Object System.Drawing.Size($rect.Width, $rect.Height))
+        $cfg = Get-Content `
+            $script:ConfigPath `
+            -Raw |
+        ConvertFrom-Json
+
+
+        if (
+            $cfg.Width -gt 0 -and
+            $cfg.Height -gt 0
+        ) {
+
+            $script:CaptureRect = `
+                New-Object System.Drawing.Rectangle(
+                    [int]$cfg.X,
+                    [int]$cfg.Y,
+                    [int]$cfg.Width,
+                    [int]$cfg.Height
+                )
+        }
+    }
+    catch {
+
+        $script:CaptureRect = $null
+    }
+}
+
+
+# ============================================================
+# クリップボード
+# ============================================================
+
+function Set-ClipboardImageRetry {
+
+    param(
+        [Parameter(Mandatory)]
+        [System.Drawing.Image]$Image
+    )
+
+
+    for ($i = 0; $i -lt 8; $i++) {
+
+        try {
+
+            [System.Windows.Forms.Clipboard]::SetImage(
+                $Image
+            )
+
+            return $true
+        }
+        catch {
+
+            Start-Sleep `
+                -Milliseconds 80
+        }
+    }
+
+
+    return $false
+}
+
+
+# ============================================================
+# キャプチャ範囲設定
+# ============================================================
+
+function Select-CaptureRegion {
+
+    $virtual = `
+        [System.Windows.Forms.SystemInformation]::VirtualScreen
+
+
+    $overlay = `
+        New-Object System.Windows.Forms.Form
+
+
+    $overlay.FormBorderStyle = `
+        [System.Windows.Forms.FormBorderStyle]::None
+
+    $overlay.StartPosition = `
+        [System.Windows.Forms.FormStartPosition]::Manual
+
+    $overlay.Location = `
+        New-Object System.Drawing.Point(
+            $virtual.X,
+            $virtual.Y
         )
 
-        # -------------------------------------------------
-        # 2. 黒色 2px の境界線を追加
-        # -------------------------------------------------
-        $borderSize = 2
-        $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
+    $overlay.Size = `
+        New-Object System.Drawing.Size(
+            $virtual.Width,
+            $virtual.Height
+        )
+
+    $overlay.TopMost = $true
+
+    $overlay.BackColor = `
+        [System.Drawing.Color]::Black
+
+    $overlay.Opacity = 0.18
+
+    $overlay.Cursor = `
+        [System.Windows.Forms.Cursors]::Cross
+
+    $overlay.KeyPreview = $true
+
+    $overlay.ShowInTaskbar = $false
+
+    $overlay.Text = "範囲選択"
+
+
+    # --------------------------------------------------------
+    # 説明
+    # --------------------------------------------------------
+
+    $label = `
+        New-Object System.Windows.Forms.Label
+
+    $label.AutoSize = $true
+
+    $label.BackColor = `
+        [System.Drawing.Color]::FromArgb(
+            230,
+            255,
+            255,
+            225
+        )
+
+    $label.ForeColor = `
+        [System.Drawing.Color]::Black
+
+    $label.Font = `
+        New-Object System.Drawing.Font(
+            "Meiryo UI",
+            10
+        )
+
+    $label.Text = `
+        "ドラッグで範囲選択 / Escでキャンセル"
+
+    $label.Location = `
+        New-Object System.Drawing.Point(
+            20,
+            20
+        )
+
+    $overlay.Controls.Add(
+        $label
+    )
+
+
+    # --------------------------------------------------------
+    # 選択状態
+    # --------------------------------------------------------
+
+    $state = [PSCustomObject]@{
+
+        Dragging = $false
+
+        StartPt = `
+            [System.Drawing.Point]::Empty
+
+        EndPt = `
+            [System.Drawing.Point]::Empty
+
+        Rect = `
+            [System.Drawing.Rectangle]::Empty
+
+        Canceled = $false
+    }
+
+
+    # --------------------------------------------------------
+    # Esc
+    # --------------------------------------------------------
+
+    $overlay.Add_KeyDown({
+
+        if (
+            $_.KeyCode -eq
+            [System.Windows.Forms.Keys]::Escape
+        ) {
+
+            $state.Canceled = $true
+
+            $overlay.Close()
+        }
+    })
+
+
+    # --------------------------------------------------------
+    # ドラッグ開始
+    # --------------------------------------------------------
+
+    $overlay.Add_MouseDown({
+
+        if (
+            $_.Button -eq
+            [System.Windows.Forms.MouseButtons]::Left
+        ) {
+
+            $state.Dragging = $true
+
+            $state.StartPt = $_.Location
+
+            $state.EndPt = $_.Location
+
+            $state.Rect = `
+                [System.Drawing.Rectangle]::Empty
+
+            $overlay.Invalidate()
+        }
+    })
+
+
+    # --------------------------------------------------------
+    # ドラッグ中
+    # --------------------------------------------------------
+
+    $overlay.Add_MouseMove({
+
+        if ($state.Dragging) {
+
+            $state.EndPt = $_.Location
+
+
+            $left = [Math]::Min(
+                $state.StartPt.X,
+                $state.EndPt.X
+            )
+
+            $top = [Math]::Min(
+                $state.StartPt.Y,
+                $state.EndPt.Y
+            )
+
+            $right = [Math]::Max(
+                $state.StartPt.X,
+                $state.EndPt.X
+            )
+
+            $bottom = [Math]::Max(
+                $state.StartPt.Y,
+                $state.EndPt.Y
+            )
+
+
+            $state.Rect = `
+                [System.Drawing.Rectangle]::FromLTRB(
+                    $left,
+                    $top,
+                    $right,
+                    $bottom
+                )
+
+
+            $overlay.Invalidate()
+        }
+    })
+
+
+    # --------------------------------------------------------
+    # ドラッグ終了
+    # --------------------------------------------------------
+
+    $overlay.Add_MouseUp({
+
+        if (
+            $_.Button -eq
+                [System.Windows.Forms.MouseButtons]::Left `
+            -and
+            $state.Dragging
+        ) {
+
+            $state.Dragging = $false
+
+
+            $left = [Math]::Min(
+                $state.StartPt.X,
+                $state.EndPt.X
+            )
+
+            $top = [Math]::Min(
+                $state.StartPt.Y,
+                $state.EndPt.Y
+            )
+
+            $right = [Math]::Max(
+                $state.StartPt.X,
+                $state.EndPt.X
+            )
+
+            $bottom = [Math]::Max(
+                $state.StartPt.Y,
+                $state.EndPt.Y
+            )
+
+
+            $state.Rect = `
+                [System.Drawing.Rectangle]::FromLTRB(
+                    $left,
+                    $top,
+                    $right,
+                    $bottom
+                )
+
+
+            if (
+                $state.Rect.Width -ge 2 -and
+                $state.Rect.Height -ge 2
+            ) {
+
+                # オーバーレイ内座標
+                # ↓
+                # 実画面座標
+
+                $screenRect = `
+                    New-Object System.Drawing.Rectangle(
+                        (
+                            $virtual.X +
+                            $state.Rect.X
+                        ),
+                        (
+                            $virtual.Y +
+                            $state.Rect.Y
+                        ),
+                        $state.Rect.Width,
+                        $state.Rect.Height
+                    )
+
+
+                $script:CaptureRect = `
+                    $screenRect
+
+
+                Save-Config
+
+
+                Show-Info `
+                    "範囲を保存" `
+                    (
+                        "X={0}, Y={1}, W={2}, H={3}" -f `
+                        $script:CaptureRect.X,
+                        $script:CaptureRect.Y,
+                        $script:CaptureRect.Width,
+                        $script:CaptureRect.Height
+                    )
+            }
+
+
+            $overlay.Close()
+        }
+    })
+
+
+    # --------------------------------------------------------
+    # 選択範囲描画
+    # --------------------------------------------------------
+
+    $overlay.Add_Paint({
+
+        if (
+            $state.Rect.Width -gt 0 -and
+            $state.Rect.Height -gt 0
+        ) {
+
+            $g = $_.Graphics
+
+
+            $pen = `
+                New-Object System.Drawing.Pen(
+                    [System.Drawing.Color]::Red,
+                    2
+                )
+
+
+            $g.DrawRectangle(
+                $pen,
+                $state.Rect
+            )
+
+
+            $text = `
+                "{0} x {1}" -f `
+                $state.Rect.Width,
+                $state.Rect.Height
+
+
+            $font = `
+                New-Object System.Drawing.Font(
+                    "Meiryo UI",
+                    10,
+                    [System.Drawing.FontStyle]::Bold
+                )
+
+
+            $brushBg = `
+                New-Object System.Drawing.SolidBrush(
+                    [System.Drawing.Color]::FromArgb(
+                        230,
+                        255,
+                        255,
+                        225
+                    )
+                )
+
+
+            $brushFg = `
+                New-Object System.Drawing.SolidBrush(
+                    [System.Drawing.Color]::Black
+                )
+
+
+            $size = `
+                $g.MeasureString(
+                    $text,
+                    $font
+                )
+
+
+            $tx = $state.Rect.X
+
+            $ty = [Math]::Max(
+                0,
+                (
+                    $state.Rect.Y -
+                    [int]$size.Height -
+                    6
+                )
+            )
+
+
+            $g.FillRectangle(
+                $brushBg,
+                $tx,
+                $ty,
+                ([int]$size.Width + 8),
+                ([int]$size.Height + 4)
+            )
+
+
+            $g.DrawString(
+                $text,
+                $font,
+                $brushFg,
+                ($tx + 4),
+                ($ty + 2)
+            )
+
+
+            $pen.Dispose()
+
+            $font.Dispose()
+
+            $brushBg.Dispose()
+
+            $brushFg.Dispose()
+        }
+    })
+
+
+    $overlay.Add_Shown({
+
+        $overlay.Activate()
+    })
+
+
+    [void]$overlay.ShowDialog()
+
+
+    $overlay.Dispose()
+}
+
+
+# ============================================================
+# 固定範囲キャプチャ
+# ============================================================
+
+function Invoke-FixedCapture {
+
+    if (
+        -not $script:CaptureRect -or
+        $script:CaptureRect.Width -le 0 -or
+        $script:CaptureRect.Height -le 0
+    ) {
+
+        Show-Info `
+            "未設定" `
+            "先に $($script:HotkeySetRect.Text) で範囲を設定してください。" `
+            2000
+
+        return
+    }
+
+
+    $rect = $script:CaptureRect
+
+
+    try {
+
+        # ====================================================
+        # 1. 固定範囲をそのままキャプチャ
+        # ====================================================
+
+        $bmp = `
+            New-Object System.Drawing.Bitmap(
+                $rect.Width,
+                $rect.Height,
+                [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+            )
+
+
+        $g = `
+            [System.Drawing.Graphics]::FromImage(
+                $bmp
+            )
+
+
+        $g.CopyFromScreen(
+            $rect.X,
+            $rect.Y,
+            0,
+            0,
+            (
+                New-Object System.Drawing.Size(
+                    $rect.Width,
+                    $rect.Height
+                )
+            ),
+            [System.Drawing.CopyPixelOperation]::SourceCopy
+        )
+
+
+        # ====================================================
+        # 2. 黒色2pxの境界
+        # ====================================================
+
+        $borderSize = `
+            $script:BorderSize
+
+
+        $brush = `
+            New-Object System.Drawing.SolidBrush(
+                [System.Drawing.Color]::Black
+            )
+
 
         # 上
         $g.FillRectangle(
@@ -34,14 +896,19 @@ function Invoke-FixedCapture {
             $borderSize
         )
 
+
         # 下
         $g.FillRectangle(
             $brush,
             0,
-            $bmp.Height - $borderSize,
+            (
+                $bmp.Height -
+                $borderSize
+            ),
             $bmp.Width,
             $borderSize
         )
+
 
         # 左
         $g.FillRectangle(
@@ -52,44 +919,82 @@ function Invoke-FixedCapture {
             $bmp.Height
         )
 
+
         # 右
         $g.FillRectangle(
             $brush,
-            $bmp.Width - $borderSize,
+            (
+                $bmp.Width -
+                $borderSize
+            ),
             0,
             $borderSize,
             $bmp.Height
         )
 
+
         $brush.Dispose()
+
         $g.Dispose()
 
-        # -------------------------------------------------
-        # 3. 横幅780pxまでアスペクト比を維持して拡大
-        # -------------------------------------------------
-        $targetWidth = 780
 
-        if ($bmp.Width -lt $targetWidth) {
+        # ====================================================
+        # 3. 横幅780px未満なら拡大
+        #
+        # 縦横比は維持
+        # 780px以上の場合は何もしない
+        # ====================================================
 
-            $scale = $targetWidth / [double]$bmp.Width
-            $targetHeight = [int][Math]::Round($bmp.Height * $scale)
+        $targetWidth = `
+            $script:TargetWidth
 
-            $resized = New-Object System.Drawing.Bitmap(
-                $targetWidth,
-                $targetHeight
-            )
 
-            $rg = [System.Drawing.Graphics]::FromImage($resized)
+        if (
+            $bmp.Width -lt
+            $targetWidth
+        ) {
 
-            # スクリーンショット向けの高品質拡大
+            $scale = `
+                $targetWidth /
+                [double]$bmp.Width
+
+
+            $targetHeight = `
+                [int][Math]::Round(
+                    $bmp.Height *
+                    $scale
+                )
+
+
+            $resized = `
+                New-Object System.Drawing.Bitmap(
+                    $targetWidth,
+                    $targetHeight,
+                    [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+                )
+
+
+            $rg = `
+                [System.Drawing.Graphics]::FromImage(
+                    $resized
+                )
+
+
             $rg.InterpolationMode = `
                 [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+
 
             $rg.PixelOffsetMode = `
                 [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
+
             $rg.CompositingQuality = `
                 [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+
+
+            $rg.SmoothingMode = `
+                [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+
 
             $rg.DrawImage(
                 $bmp,
@@ -99,30 +1004,248 @@ function Invoke-FixedCapture {
                 $targetHeight
             )
 
+
             $rg.Dispose()
+
             $bmp.Dispose()
+
 
             $bmp = $resized
         }
 
-        # -------------------------------------------------
-        # 4. クリップボードへ
-        # -------------------------------------------------
-        if (Set-ClipboardImageRetry -Image $bmp) {
 
-            Show-Info "キャプチャ完了" `
-                ("{0} x {1} をクリップボードへコピーしました。" -f `
-                $bmp.Width, $bmp.Height) 1200
+        # ====================================================
+        # 4. クリップボード
+        # ====================================================
+
+        if (
+            Set-ClipboardImageRetry `
+                -Image $bmp
+        ) {
+
+            Show-Info `
+                "キャプチャ完了" `
+                (
+                    "{0} x {1} をクリップボードへコピーしました。" -f `
+                    $bmp.Width,
+                    $bmp.Height
+                ) `
+                1200
+
 
             [System.Media.SystemSounds]::Asterisk.Play()
         }
         else {
-            Show-Info "失敗" "クリップボードへの格納に失敗しました。" 2000
+
+            Show-Info `
+                "失敗" `
+                "クリップボードへの格納に失敗しました。" `
+                2000
         }
+
 
         $bmp.Dispose()
     }
     catch {
-        Show-Info "エラー" $_.Exception.Message 2500
+
+        Show-Info `
+            "エラー" `
+            $_.Exception.Message `
+            3000
     }
+}
+
+
+# ============================================================
+# 設定読込
+# ============================================================
+
+Load-Config
+
+
+# ============================================================
+# トレイメニュー
+# ============================================================
+
+$menu = `
+    New-Object System.Windows.Forms.ContextMenuStrip
+
+
+$itemSet = `
+    $menu.Items.Add(
+        "範囲を再設定"
+    )
+
+
+$itemSet.Add_Click({
+
+    Select-CaptureRegion
+
+}) | Out-Null
+
+
+$itemCap = `
+    $menu.Items.Add(
+        "今すぐキャプチャ"
+    )
+
+
+$itemCap.Add_Click({
+
+    Invoke-FixedCapture
+
+}) | Out-Null
+
+
+[void]$menu.Items.Add("-")
+
+
+$itemExit = `
+    $menu.Items.Add(
+        "終了"
+    )
+
+
+$itemExit.Add_Click({
+
+    try {
+        $script:NotifyIcon.Visible = $false
+    }
+    catch {
+    }
+
+    [System.Windows.Forms.Application]::Exit()
+
+}) | Out-Null
+
+
+$script:NotifyIcon.ContextMenuStrip = `
+    $menu
+
+
+# ============================================================
+# ホットキー
+# ============================================================
+
+$hotkeyForm = `
+    New-Object HotkeyWindow
+
+
+# Handleを作成
+$null = $hotkeyForm.Handle
+
+
+$ok1 = `
+    $hotkeyForm.AddHotkey(
+        $script:HotkeySetRect.Id,
+        [uint32]$script:HotkeySetRect.Modifiers,
+        [uint32]$script:HotkeySetRect.Key
+    )
+
+
+$ok2 = `
+    $hotkeyForm.AddHotkey(
+        $script:HotkeyCapture.Id,
+        [uint32]$script:HotkeyCapture.Modifiers,
+        [uint32]$script:HotkeyCapture.Key
+    )
+
+
+if (
+    -not $ok1 -or
+    -not $ok2
+) {
+
+    [System.Windows.Forms.MessageBox]::Show(
+        "ホットキー登録に失敗しました。`r`n他のアプリと競合している可能性があります。",
+        "固定範囲キャプチャ",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    ) |
+    Out-Null
+
+
+    try {
+        $script:NotifyIcon.Visible = $false
+    }
+    catch {
+    }
+
+
+    exit
+}
+
+
+# ============================================================
+# ホットキー押下
+# ============================================================
+
+$hotkeyForm.add_HotKeyPressed({
+
+    param(
+        $sender,
+        $id
+    )
+
+
+    switch ($id) {
+
+        1 {
+            Select-CaptureRegion
+        }
+
+        2 {
+            Invoke-FixedCapture
+        }
+    }
+})
+
+
+# ============================================================
+# 起動通知
+# ============================================================
+
+if ($script:CaptureRect) {
+
+    Show-Info `
+        "固定範囲キャプチャ 起動" `
+        (
+            "範囲: {0} x {1}`r`n範囲設定: {2}`r`nキャプチャ: {3}" -f `
+            $script:CaptureRect.Width,
+            $script:CaptureRect.Height,
+            $script:HotkeySetRect.Text,
+            $script:HotkeyCapture.Text
+        ) `
+        2500
+}
+else {
+
+    Show-Info `
+        "固定範囲キャプチャ 起動" `
+        (
+            "範囲設定: {0}`r`nキャプチャ: {1}" -f `
+            $script:HotkeySetRect.Text,
+            $script:HotkeyCapture.Text
+        ) `
+        2500
+}
+
+
+# ============================================================
+# 常駐
+# ============================================================
+
+[System.Windows.Forms.Application]::Run(
+    $hotkeyForm
+)
+
+
+# ============================================================
+# 終了
+# ============================================================
+
+try {
+    $script:NotifyIcon.Visible = $false
+}
+catch {
 }
