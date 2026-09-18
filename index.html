@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 
 # ============================================================
-# FixedClipCapture v0.3
+# FixedClipCapture v0.4
 #
 # Ctrl + Alt + Shift + S
 #   固定キャプチャ範囲を設定
@@ -9,9 +9,15 @@
 # Ctrl + Alt + A
 #   固定範囲をキャプチャ
 #   → 黒2px境界
-#   → そのままクリップボードへ格納
+#   → クリップボードへ格納
 #
-# 拡大・縮小処理なし
+# Ctrl + Alt + V
+#   クリップボード内の画像を
+#   Outlook(クラシック版)へ貼り付け
+#   → Outlook上で横幅780px相当に固定
+#
+# ※ Outlook側の表示サイズを固定する方式
+# ※ 画像自体を780pxへ拡大はしない
 # ============================================================
 
 
@@ -44,7 +50,7 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 
 
 # ============================================================
-# DPIスケーリング対策
+# DPIスケーリング対策 / DPI取得
 # WinFormsを読み込む前に実行
 # ============================================================
 
@@ -59,6 +65,11 @@ public static class DpiHelper
     [DllImport("user32.dll")]
     public static extern bool SetProcessDpiAwarenessContext(
         IntPtr dpiContext
+    );
+
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(
+        IntPtr hwnd
     );
 }
 "@
@@ -167,21 +178,9 @@ public class HotkeyWindow : Form
         FormClosingEventArgs e
     )
     {
-        try {
-            UnregisterHotKey(
-                this.Handle,
-                1
-            );
-        }
-        catch {}
-
-        try {
-            UnregisterHotKey(
-                this.Handle,
-                2
-            );
-        }
-        catch {}
+        try { UnregisterHotKey(this.Handle, 1); } catch {}
+        try { UnregisterHotKey(this.Handle, 2); } catch {}
+        try { UnregisterHotKey(this.Handle, 3); } catch {}
 
         base.OnFormClosing(e);
     }
@@ -210,7 +209,6 @@ $script:HotkeySetRect = @{
     Text      = "Ctrl + Alt + Shift + S"
 }
 
-
 # Ctrl + Alt + A
 # キャプチャ
 $script:HotkeyCapture = @{
@@ -220,10 +218,20 @@ $script:HotkeyCapture = @{
     Text      = "Ctrl + Alt + A"
 }
 
+# Ctrl + Alt + V
+# Outlookへ貼り付け（横幅固定）
+$script:HotkeyOutlookPaste = @{
+    Id        = 3
+    Modifiers = 1 + 2
+    Key       = [int][System.Windows.Forms.Keys]::V
+    Text      = "Ctrl + Alt + V"
+}
 
 # 黒枠の太さ
 $script:BorderSize = 2
 
+# Outlook上での目標表示横幅(px相当)
+$script:OutlookTargetPx = 780
 
 # 設定保存先
 $script:AppDir = Join-Path `
@@ -233,7 +241,6 @@ $script:AppDir = Join-Path `
 $script:ConfigPath = Join-Path `
     $script:AppDir `
     "config.json"
-
 
 # キャプチャ範囲
 $script:CaptureRect = $null
@@ -268,16 +275,9 @@ function Show-Info {
     )
 
     try {
-
-        $script:NotifyIcon.BalloonTipTitle = `
-            $Title
-
-        $script:NotifyIcon.BalloonTipText = `
-            $Text
-
-        $script:NotifyIcon.ShowBalloonTip(
-            $Timeout
-        )
+        $script:NotifyIcon.BalloonTipTitle = $Title
+        $script:NotifyIcon.BalloonTipText = $Text
+        $script:NotifyIcon.ShowBalloonTip($Timeout)
     }
     catch {
     }
@@ -291,28 +291,20 @@ function Show-Info {
 function Save-Config {
 
     if (-not (Test-Path $script:AppDir)) {
-
         New-Item `
             -ItemType Directory `
             -Path $script:AppDir `
-            -Force |
-        Out-Null
+            -Force | Out-Null
     }
-
 
     if ($script:CaptureRect) {
 
         $obj = [PSCustomObject]@{
-
-            X = $script:CaptureRect.X
-
-            Y = $script:CaptureRect.Y
-
-            Width = $script:CaptureRect.Width
-
+            X      = $script:CaptureRect.X
+            Y      = $script:CaptureRect.Y
+            Width  = $script:CaptureRect.Width
             Height = $script:CaptureRect.Height
         }
-
 
         $obj |
         ConvertTo-Json |
@@ -333,20 +325,16 @@ function Load-Config {
         return
     }
 
-
     try {
-
         $cfg = Get-Content `
             $script:ConfigPath `
             -Raw |
         ConvertFrom-Json
 
-
         if (
             $cfg.Width -gt 0 -and
             $cfg.Height -gt 0
         ) {
-
             $script:CaptureRect = `
                 New-Object System.Drawing.Rectangle(
                     [int]$cfg.X,
@@ -357,7 +345,6 @@ function Load-Config {
         }
     }
     catch {
-
         $script:CaptureRect = $null
     }
 }
@@ -374,26 +361,45 @@ function Set-ClipboardImageRetry {
         [System.Drawing.Image]$Image
     )
 
-
     for ($i = 0; $i -lt 8; $i++) {
-
         try {
-
-            [System.Windows.Forms.Clipboard]::SetImage(
-                $Image
-            )
-
+            [System.Windows.Forms.Clipboard]::SetImage($Image)
             return $true
         }
         catch {
-
-            Start-Sleep `
-                -Milliseconds 80
+            Start-Sleep -Milliseconds 80
         }
     }
 
-
     return $false
+}
+
+
+# ============================================================
+# OutlookウィンドウのDPI取得
+# ============================================================
+
+function Get-OutlookInspectorDpi {
+
+    param(
+        [Parameter(Mandatory)]
+        $Inspector
+    )
+
+    try {
+        $hwnd = [IntPtr]([int]$Inspector.Hwnd)
+
+        if ($hwnd -ne [IntPtr]::Zero) {
+            $dpi = [int][DpiHelper]::GetDpiForWindow($hwnd)
+            if ($dpi -gt 0) {
+                return $dpi
+            }
+        }
+    }
+    catch {
+    }
+
+    return 96
 }
 
 
@@ -406,10 +412,8 @@ function Select-CaptureRegion {
     $virtual = `
         [System.Windows.Forms.SystemInformation]::VirtualScreen
 
-
     $overlay = `
         New-Object System.Windows.Forms.Form
-
 
     $overlay.FormBorderStyle = `
         [System.Windows.Forms.FormBorderStyle]::None
@@ -430,31 +434,17 @@ function Select-CaptureRegion {
         )
 
     $overlay.TopMost = $true
-
-    $overlay.BackColor = `
-        [System.Drawing.Color]::Black
-
+    $overlay.BackColor = [System.Drawing.Color]::Black
     $overlay.Opacity = 0.18
-
-    $overlay.Cursor = `
-        [System.Windows.Forms.Cursors]::Cross
-
+    $overlay.Cursor = [System.Windows.Forms.Cursors]::Cross
     $overlay.KeyPreview = $true
-
     $overlay.ShowInTaskbar = $false
-
     $overlay.Text = "範囲選択"
-
-
-    # ========================================================
-    # 説明
-    # ========================================================
 
     $label = `
         New-Object System.Windows.Forms.Label
 
     $label.AutoSize = $true
-
     $label.BackColor = `
         [System.Drawing.Color]::FromArgb(
             230,
@@ -462,105 +452,57 @@ function Select-CaptureRegion {
             255,
             225
         )
-
-    $label.ForeColor = `
-        [System.Drawing.Color]::Black
-
+    $label.ForeColor = [System.Drawing.Color]::Black
     $label.Font = `
         New-Object System.Drawing.Font(
             "Meiryo UI",
             10
         )
-
-    $label.Text = `
-        "ドラッグで範囲選択 / Escでキャンセル"
-
+    $label.Text = "ドラッグで範囲選択 / Escでキャンセル"
     $label.Location = `
         New-Object System.Drawing.Point(
             20,
             20
         )
 
-    $overlay.Controls.Add(
-        $label
-    )
-
-
-    # ========================================================
-    # 選択状態
-    # ========================================================
+    $overlay.Controls.Add($label)
 
     $state = [PSCustomObject]@{
-
         Dragging = $false
-
-        StartPt = `
-            [System.Drawing.Point]::Empty
-
-        EndPt = `
-            [System.Drawing.Point]::Empty
-
-        Rect = `
-            [System.Drawing.Rectangle]::Empty
-
+        StartPt  = [System.Drawing.Point]::Empty
+        EndPt    = [System.Drawing.Point]::Empty
+        Rect     = [System.Drawing.Rectangle]::Empty
         Canceled = $false
     }
 
-
-    # ========================================================
-    # Esc
-    # ========================================================
-
     $overlay.Add_KeyDown({
-
         if (
             $_.KeyCode -eq
             [System.Windows.Forms.Keys]::Escape
         ) {
-
             $state.Canceled = $true
-
             $overlay.Close()
         }
     })
 
-
-    # ========================================================
-    # ドラッグ開始
-    # ========================================================
-
     $overlay.Add_MouseDown({
-
         if (
             $_.Button -eq
             [System.Windows.Forms.MouseButtons]::Left
         ) {
-
             $state.Dragging = $true
-
             $state.StartPt = $_.Location
-
             $state.EndPt = $_.Location
-
-            $state.Rect = `
-                [System.Drawing.Rectangle]::Empty
-
+            $state.Rect = [System.Drawing.Rectangle]::Empty
             $overlay.Invalidate()
         }
     })
 
-
-    # ========================================================
-    # ドラッグ中
-    # ========================================================
-
     $overlay.Add_MouseMove({
-
         if ($state.Dragging) {
 
             $state.EndPt = $_.Location
 
-
             $left = [Math]::Min(
                 $state.StartPt.X,
                 $state.EndPt.X
@@ -581,7 +523,6 @@ function Select-CaptureRegion {
                 $state.EndPt.Y
             )
 
-
             $state.Rect = `
                 [System.Drawing.Rectangle]::FromLTRB(
                     $left,
@@ -589,28 +530,18 @@ function Select-CaptureRegion {
                     $right,
                     $bottom
                 )
-
 
             $overlay.Invalidate()
         }
     })
 
-
-    # ========================================================
-    # ドラッグ終了
-    # ========================================================
-
     $overlay.Add_MouseUp({
-
         if (
-            $_.Button -eq
-                [System.Windows.Forms.MouseButtons]::Left `
+            $_.Button -eq [System.Windows.Forms.MouseButtons]::Left `
             -and
             $state.Dragging
         ) {
-
             $state.Dragging = $false
-
 
             $left = [Math]::Min(
                 $state.StartPt.X,
@@ -632,7 +563,6 @@ function Select-CaptureRegion {
                 $state.EndPt.Y
             )
 
-
             $state.Rect = `
                 [System.Drawing.Rectangle]::FromLTRB(
                     $left,
@@ -640,38 +570,22 @@ function Select-CaptureRegion {
                     $right,
                     $bottom
                 )
-
 
             if (
                 $state.Rect.Width -ge 2 -and
                 $state.Rect.Height -ge 2
             ) {
-
-                # オーバーレイ上の座標
-                # ↓
-                # 実画面座標
-
                 $screenRect = `
                     New-Object System.Drawing.Rectangle(
-                        (
-                            $virtual.X +
-                            $state.Rect.X
-                        ),
-                        (
-                            $virtual.Y +
-                            $state.Rect.Y
-                        ),
+                        ($virtual.X + $state.Rect.X),
+                        ($virtual.Y + $state.Rect.Y),
                         $state.Rect.Width,
                         $state.Rect.Height
                     )
 
-
-                $script:CaptureRect = `
-                    $screenRect
-
+                $script:CaptureRect = $screenRect
 
                 Save-Config
-
 
                 Show-Info `
                     "範囲を保存" `
@@ -684,18 +598,11 @@ function Select-CaptureRegion {
                     )
             }
 
-
             $overlay.Close()
         }
     })
 
-
-    # ========================================================
-    # 選択範囲描画
-    # ========================================================
-
     $overlay.Add_Paint({
-
         if (
             $state.Rect.Width -gt 0 -and
             $state.Rect.Height -gt 0
@@ -703,25 +610,20 @@ function Select-CaptureRegion {
 
             $g = $_.Graphics
 
-
             $pen = `
                 New-Object System.Drawing.Pen(
                     [System.Drawing.Color]::Red,
                     2
                 )
 
-
             $g.DrawRectangle(
                 $pen,
                 $state.Rect
             )
 
-
-            $text = `
-                "{0} x {1}" -f `
+            $text = "{0} x {1}" -f `
                 $state.Rect.Width,
                 $state.Rect.Height
-
 
             $font = `
                 New-Object System.Drawing.Font(
@@ -729,7 +631,6 @@ function Select-CaptureRegion {
                     10,
                     [System.Drawing.FontStyle]::Bold
                 )
-
 
             $brushBg = `
                 New-Object System.Drawing.SolidBrush(
@@ -741,31 +642,18 @@ function Select-CaptureRegion {
                     )
                 )
 
-
             $brushFg = `
                 New-Object System.Drawing.SolidBrush(
                     [System.Drawing.Color]::Black
                 )
 
-
-            $size = `
-                $g.MeasureString(
-                    $text,
-                    $font
-                )
-
+            $size = $g.MeasureString($text, $font)
 
             $tx = $state.Rect.X
-
             $ty = [Math]::Max(
                 0,
-                (
-                    $state.Rect.Y -
-                    [int]$size.Height -
-                    6
-                )
+                ($state.Rect.Y - [int]$size.Height - 6)
             )
-
 
             $g.FillRectangle(
                 $brushBg,
@@ -775,7 +663,6 @@ function Select-CaptureRegion {
                 ([int]$size.Height + 4)
             )
 
-
             $g.DrawString(
                 $text,
                 $font,
@@ -784,27 +671,18 @@ function Select-CaptureRegion {
                 ($ty + 2)
             )
 
-
             $pen.Dispose()
-
             $font.Dispose()
-
             $brushBg.Dispose()
-
             $brushFg.Dispose()
         }
     })
 
-
     $overlay.Add_Shown({
-
         $overlay.Activate()
     })
 
-
     [void]$overlay.ShowDialog()
-
-
     $overlay.Dispose()
 }
 
@@ -820,24 +698,16 @@ function Invoke-FixedCapture {
         $script:CaptureRect.Width -le 0 -or
         $script:CaptureRect.Height -le 0
     ) {
-
         Show-Info `
             "未設定" `
             "先に $($script:HotkeySetRect.Text) で範囲を設定してください。" `
             2000
-
         return
     }
 
-
     $rect = $script:CaptureRect
 
-
     try {
-
-        # ====================================================
-        # 1. 固定範囲をキャプチャ
-        # ====================================================
 
         $bmp = `
             New-Object System.Drawing.Bitmap(
@@ -846,12 +716,7 @@ function Invoke-FixedCapture {
                 [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
             )
 
-
-        $g = `
-            [System.Drawing.Graphics]::FromImage(
-                $bmp
-            )
-
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
 
         $g.CopyFromScreen(
             $rect.X,
@@ -867,20 +732,13 @@ function Invoke-FixedCapture {
             [System.Drawing.CopyPixelOperation]::SourceCopy
         )
 
-
-        # ====================================================
-        # 2. 黒色2pxの境界
-        # ====================================================
-
-        $borderSize = `
-            $script:BorderSize
-
+        # 黒2px境界
+        $borderSize = $script:BorderSize
 
         $brush = `
             New-Object System.Drawing.SolidBrush(
                 [System.Drawing.Color]::Black
             )
-
 
         # 上
         $g.FillRectangle(
@@ -891,19 +749,14 @@ function Invoke-FixedCapture {
             $borderSize
         )
 
-
         # 下
         $g.FillRectangle(
             $brush,
             0,
-            (
-                $bmp.Height -
-                $borderSize
-            ),
+            ($bmp.Height - $borderSize),
             $bmp.Width,
             $borderSize
         )
-
 
         # 左
         $g.FillRectangle(
@@ -914,33 +767,19 @@ function Invoke-FixedCapture {
             $bmp.Height
         )
 
-
         # 右
         $g.FillRectangle(
             $brush,
-            (
-                $bmp.Width -
-                $borderSize
-            ),
+            ($bmp.Width - $borderSize),
             0,
             $borderSize,
             $bmp.Height
         )
 
-
         $brush.Dispose()
-
         $g.Dispose()
 
-
-        # ====================================================
-        # 3. そのままクリップボードへ
-        # ====================================================
-
-        if (
-            Set-ClipboardImageRetry `
-                -Image $bmp
-        ) {
+        if (Set-ClipboardImageRetry -Image $bmp) {
 
             Show-Info `
                 "キャプチャ完了" `
@@ -951,26 +790,171 @@ function Invoke-FixedCapture {
                 ) `
                 1200
 
-
             [System.Media.SystemSounds]::Asterisk.Play()
         }
         else {
-
             Show-Info `
                 "失敗" `
                 "クリップボードへの格納に失敗しました。" `
                 2000
         }
 
-
         $bmp.Dispose()
     }
     catch {
-
         Show-Info `
             "エラー" `
             $_.Exception.Message `
             3000
+    }
+}
+
+
+# ============================================================
+# Outlookへ貼り付けて横幅固定
+# ============================================================
+
+function Invoke-OutlookPasteFixedWidth {
+
+    try {
+
+        if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) {
+            Show-Info `
+                "画像なし" `
+                "クリップボードに画像がありません。先に $($script:HotkeyCapture.Text) でキャプチャしてください。" `
+                2500
+            return
+        }
+
+        try {
+            $outlook = [Runtime.InteropServices.Marshal]::GetActiveObject("Outlook.Application")
+        }
+        catch {
+            Show-Info `
+                "Outlook未検出" `
+                "クラシックOutlookが起動していないか、取得できませんでした。" `
+                2500
+            return
+        }
+
+        if (-not $outlook) {
+            Show-Info `
+                "Outlook未検出" `
+                "Outlook.Application を取得できませんでした。" `
+                2500
+            return
+        }
+
+        $inspector = $outlook.ActiveInspector()
+
+        if (-not $inspector) {
+            Show-Info `
+                "ウィンドウ未検出" `
+                "編集中のメールウィンドウを前面にしてから実行してください。" `
+                2500
+            return
+        }
+
+        if (-not $inspector.IsWordMail()) {
+            Show-Info `
+                "未対応" `
+                "このOutlook編集画面はWordエディタではありません。" `
+                2500
+            return
+        }
+
+        $doc = $inspector.WordEditor
+
+        if (-not $doc) {
+            Show-Info `
+                "取得失敗" `
+                "WordEditorを取得できませんでした。" `
+                2500
+            return
+        }
+
+        $wordApp = $doc.Application
+        $sel = $wordApp.Selection
+
+        if (-not $sel) {
+            Show-Info `
+                "取得失敗" `
+                "Outlookの選択位置を取得できませんでした。" `
+                2500
+            return
+        }
+
+        # 貼り付け前の位置を記録
+        $startPos = [int]$sel.Start
+
+        # 貼り付け
+        $sel.Paste()
+
+        # 貼り付け後の範囲
+        $endPos = [int]$sel.End
+
+        if ($endPos -lt $startPos) {
+            $tmp = $startPos
+            $startPos = $endPos
+            $endPos = $tmp
+        }
+
+        $rng = $doc.Range($startPos, $endPos)
+
+        if (-not $rng -or $rng.InlineShapes.Count -lt 1) {
+            Show-Info `
+                "貼り付け失敗" `
+                "貼り付けた画像を取得できませんでした。" `
+                2500
+            return
+        }
+
+        # 貼り付けた最後のInlineShapeを対象
+        $ils = $rng.InlineShapes.Item($rng.InlineShapes.Count)
+
+        if (-not $ils) {
+            Show-Info `
+                "取得失敗" `
+                "貼り付けた画像オブジェクトを取得できませんでした。" `
+                2500
+            return
+        }
+
+        # OutlookウィンドウのDPIに応じて
+        # 780px相当になるpt値を計算
+        $dpi = Get-OutlookInspectorDpi -Inspector $inspector
+
+        if ($dpi -le 0) {
+            $dpi = 96
+        }
+
+        $targetPx = [double]$script:OutlookTargetPx
+        $targetPt = [single]($targetPx * 72.0 / [double]$dpi)
+
+        # 縦横比固定
+        # msoTrue = -1
+        $ils.LockAspectRatio = -1
+
+        # 幅を設定
+        $ils.Width = $targetPt
+
+        Show-Info `
+            "Outlook貼り付け完了" `
+            (
+                "横幅を約 {0}px 相当に設定しました。(DPI={1}, Width={2:N1}pt)" -f `
+                [int]$targetPx,
+                $dpi,
+                $targetPt
+            ) `
+            1800
+
+        [System.Media.SystemSounds]::Asterisk.Play()
+    }
+    catch {
+        Show-Info `
+            "エラー" `
+            $_.Exception.Message `
+            3500
     }
 }
 
@@ -989,44 +973,25 @@ Load-Config
 $menu = `
     New-Object System.Windows.Forms.ContextMenuStrip
 
-
-$itemSet = `
-    $menu.Items.Add(
-        "範囲を再設定"
-    )
-
-
+$itemSet = $menu.Items.Add("範囲を再設定")
 $itemSet.Add_Click({
-
     Select-CaptureRegion
-
 }) | Out-Null
 
-
-$itemCap = `
-    $menu.Items.Add(
-        "今すぐキャプチャ"
-    )
-
-
+$itemCap = $menu.Items.Add("今すぐキャプチャ")
 $itemCap.Add_Click({
-
     Invoke-FixedCapture
-
 }) | Out-Null
 
+$itemPaste = $menu.Items.Add("Outlookへ780px貼り付け")
+$itemPaste.Add_Click({
+    Invoke-OutlookPasteFixedWidth
+}) | Out-Null
 
 [void]$menu.Items.Add("-")
 
-
-$itemExit = `
-    $menu.Items.Add(
-        "終了"
-    )
-
-
+$itemExit = $menu.Items.Add("終了")
 $itemExit.Add_Click({
-
     try {
         $script:NotifyIcon.Visible = $false
     }
@@ -1034,12 +999,9 @@ $itemExit.Add_Click({
     }
 
     [System.Windows.Forms.Application]::Exit()
-
 }) | Out-Null
 
-
-$script:NotifyIcon.ContextMenuStrip = `
-    $menu
+$script:NotifyIcon.ContextMenuStrip = $menu
 
 
 # ============================================================
@@ -1049,10 +1011,8 @@ $script:NotifyIcon.ContextMenuStrip = `
 $hotkeyForm = `
     New-Object HotkeyWindow
 
-
 # Handle作成
 $null = $hotkeyForm.Handle
-
 
 $ok1 = `
     $hotkeyForm.AddHotkey(
@@ -1061,7 +1021,6 @@ $ok1 = `
         [uint32]$script:HotkeySetRect.Key
     )
 
-
 $ok2 = `
     $hotkeyForm.AddHotkey(
         $script:HotkeyCapture.Id,
@@ -1069,10 +1028,17 @@ $ok2 = `
         [uint32]$script:HotkeyCapture.Key
     )
 
+$ok3 = `
+    $hotkeyForm.AddHotkey(
+        $script:HotkeyOutlookPaste.Id,
+        [uint32]$script:HotkeyOutlookPaste.Modifiers,
+        [uint32]$script:HotkeyOutlookPaste.Key
+    )
 
 if (
     -not $ok1 -or
-    -not $ok2
+    -not $ok2 -or
+    -not $ok3
 ) {
 
     [System.Windows.Forms.MessageBox]::Show(
@@ -1080,16 +1046,13 @@ if (
         "固定範囲キャプチャ",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Error
-    ) |
-    Out-Null
-
+    ) | Out-Null
 
     try {
         $script:NotifyIcon.Visible = $false
     }
     catch {
     }
-
 
     exit
 }
@@ -1106,7 +1069,6 @@ $hotkeyForm.add_HotKeyPressed({
         $id
     )
 
-
     switch ($id) {
 
         1 {
@@ -1115,6 +1077,10 @@ $hotkeyForm.add_HotKeyPressed({
 
         2 {
             Invoke-FixedCapture
+        }
+
+        3 {
+            Invoke-OutlookPasteFixedWidth
         }
     }
 })
@@ -1129,24 +1095,26 @@ if ($script:CaptureRect) {
     Show-Info `
         "固定範囲キャプチャ 起動" `
         (
-            "範囲: {0} x {1}`r`n範囲設定: {2}`r`nキャプチャ: {3}" -f `
+            "範囲: {0} x {1}`r`n範囲設定: {2}`r`nキャプチャ: {3}`r`nOutlook貼り付け: {4}" -f `
             $script:CaptureRect.Width,
             $script:CaptureRect.Height,
             $script:HotkeySetRect.Text,
-            $script:HotkeyCapture.Text
+            $script:HotkeyCapture.Text,
+            $script:HotkeyOutlookPaste.Text
         ) `
-        2500
+        3000
 }
 else {
 
     Show-Info `
         "固定範囲キャプチャ 起動" `
         (
-            "範囲設定: {0}`r`nキャプチャ: {1}" -f `
+            "範囲設定: {0}`r`nキャプチャ: {1}`r`nOutlook貼り付け: {2}" -f `
             $script:HotkeySetRect.Text,
-            $script:HotkeyCapture.Text
+            $script:HotkeyCapture.Text,
+            $script:HotkeyOutlookPaste.Text
         ) `
-        2500
+        3000
 }
 
 
